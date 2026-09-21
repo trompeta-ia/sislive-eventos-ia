@@ -21,7 +21,7 @@ const PERSONAJES = {
   "SIRENA":            "Place the person in an enchanted underwater kingdom with a mermaid tail theme, glowing seashells and soft light, fantasy photorealistic",
   "HADA DEL BOSQUE":   "Surround the person with a magical enchanted forest, glowing fairy lights and delicate translucent fairy wings, soft dreamy lighting, photorealistic",
   "REINA MEDIEVAL":    "Place the person in a medieval castle throne room with an elegant crown and royal robe theme, warm torch lighting, photorealistic",
-  "HÃ‰ROE DEL TRUENO":  "Add a dramatic thunder-god superhero theme around the person with lightning, storm clouds and glowing energy, epic cinematic lighting, photorealistic",
+  "HÃƒâ€°ROE DEL TRUENO":  "Add a dramatic thunder-god superhero theme around the person with lightning, storm clouds and glowing energy, epic cinematic lighting, photorealistic",
   "GUERRERA AMAZONA":  "Add a warrior-princess amazon theme around the person with golden armor accents and an epic battlefield sky, heroic lighting, photorealistic",
   "SOMBRA NOCTURNA":   "Add a dark masked night-hero theme around the person with a dramatic city skyline at night and moody blue lighting, photorealistic",
   "VELOCISTA":         "Add a speedster superhero theme around the person with motion-blur energy trails and glowing lightning, dynamic cinematic lighting, photorealistic",
@@ -30,7 +30,7 @@ const PERSONAJES = {
 const MODELO = "gemini-2.5-flash-image";
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
-app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA â€” OK"));
+app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA Ã¢â‚¬â€ OK"));
 
 app.post("/generar", async (req, res) => {
   try {
@@ -95,6 +95,7 @@ async function pedirGeneracion(idImagen, instruccion) {
   let d = {};
   try { d = JSON.parse(texto); } catch (e) {}
   const genId =
+    (d.generate && d.generate.generationId) ||
     (d.sdGenerationJob && d.sdGenerationJob.generationId) ||
     (d.generations_by_pk && d.generations_by_pk.id) ||
     (d.generation && d.generation.id) ||
