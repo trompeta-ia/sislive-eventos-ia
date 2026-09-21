@@ -3,12 +3,6 @@ const cors = require("cors");
 
 const app = express();
 app.use(express.json({ limit: "12mb" }));
-
-const ORIGENES = [
-  "https://sis-eventos.web.app",
-  "https://sis-eventos.firebaseapp.com",
-  "https://sislive.com.uy",
-];
 app.use(cors({ origin: (origin, cb) => cb(null, true) }));
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
@@ -27,7 +21,6 @@ const PERSONAJES = {
   "SIRENA":            "Place the person in an enchanted underwater kingdom with a mermaid tail theme, glowing seashells and soft light, fantasy photorealistic",
   "HADA DEL BOSQUE":   "Surround the person with a magical enchanted forest, glowing fairy lights and delicate translucent fairy wings, soft dreamy lighting, photorealistic",
   "REINA MEDIEVAL":    "Place the person in a medieval castle throne room with an elegant crown and royal robe theme, warm torch lighting, photorealistic",
-  "HEROE DEL TRUENO":  "Add a dramatic thunder-god superhero theme around the person with lightning, storm clouds and glowing energy, epic cinematic lighting, photorealistic",
   "HÉROE DEL TRUENO":  "Add a dramatic thunder-god superhero theme around the person with lightning, storm clouds and glowing energy, epic cinematic lighting, photorealistic",
   "GUERRERA AMAZONA":  "Add a warrior-princess amazon theme around the person with golden armor accents and an epic battlefield sky, heroic lighting, photorealistic",
   "SOMBRA NOCTURNA":   "Add a dark masked night-hero theme around the person with a dramatic city skyline at night and moody blue lighting, photorealistic",
@@ -41,9 +34,9 @@ app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA — OK"));
 
 app.post("/generar", async (req, res) => {
   try {
-    if (!KEY) return res.status(500).json({ error: "Falta configurar LEONARDO_API_KEY" });
+    if (!KEY) return res.status(500).json({ error: "Falta LEONARDO_API_KEY" });
     const { cara, personaje } = req.body || {};
-    if (!cara || !cara.startsWith("data:image/")) return res.status(400).json({ error: "Falta la foto de la cara" });
+    if (!cara || !cara.startsWith("data:image/")) return res.status(400).json({ error: "Falta la foto" });
     const instruccion = PERSONAJES[personaje];
     if (!instruccion) return res.status(400).json({ error: "Personaje desconocido: " + personaje });
 
@@ -95,9 +88,17 @@ async function pedirGeneracion(idImagen, instruccion) {
       },
     }),
   });
-  if (!r.ok) { const t = await r.text(); throw new Error("generacion fallo: " + r.status + " " + t); }
-  const d = await r.json();
-  const genId = (d.sdGenerationJob && d.sdGenerationJob.generationId) || (d.generations_by_pk && d.generations_by_pk.id) || d.id;
+  const texto = await r.text();
+  console.log("RESPUESTA LEONARDO (status " + r.status + "):", texto);
+  if (!r.ok) throw new Error("generacion fallo: " + r.status);
+  let d = {};
+  try { d = JSON.parse(texto); } catch (e) {}
+  const genId =
+    (d.sdGenerationJob && d.sdGenerationJob.generationId) ||
+    (d.generations_by_pk && d.generations_by_pk.id) ||
+    (d.generation && d.generation.id) ||
+    (d.data && d.data.id) ||
+    d.generationId || d.id;
   if (!genId) throw new Error("no vino el id de generacion");
   return genId;
 }
@@ -112,7 +113,7 @@ async function esperarResultado(genId) {
     if (gen && gen.status === "COMPLETE" && gen.generated_images && gen.generated_images.length) {
       return gen.generated_images[0].url;
     }
-    if (gen && gen.status === "FAILED") throw new Error("Leonardo marco FAILED");
+    if (gen && gen.status === "FAILED") throw new Error("Leonardo FAILED");
   }
   throw new Error("timeout esperando la imagen");
 }
