@@ -1,0 +1,15 @@
+{
+  "name": "sislive_eventos",
+  "version": "1.0.0",
+  "description": "Servidor intermedio que conecta el espejo SIS con Leonardo AI",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  }
+}
