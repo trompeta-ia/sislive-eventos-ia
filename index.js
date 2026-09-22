@@ -41,9 +41,9 @@ app.post("/generar", async (req, res) => {
   }
 });
 
-// Lee todos los personajes del evento y busca el que coincide por nombre
+// Lee la biblioteca compartida y busca el personaje por nombre
 async function buscarPromptEnBase(eventoId, nombrePersonaje) {
-  const r = await fetch(`${DB_URL}/eventos/${eventoId}/personajes.json`);
+  const r = await fetch(`${DB_URL}/biblioteca/universos.json`);
   if (!r.ok) return null;
   const universos = await r.json();
   if (!universos) return null;

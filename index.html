@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIS EVENTOS - ESPEJO PRO NEÓN</title>
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-storage-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@900&family=Urbanist:wght@700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        :root { --cian: #00ffff; --magenta: #ff00ea; --amarillo: #ffea00; --verde: #00ff00; --bg: #000; }
+
+        body, html {
+            margin: 0; padding: 0; background: var(--bg);
+            font-family: 'Urbanist', sans-serif; overflow: hidden;
+            height: 100vh; width: 100vw; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+
+        /* MARCO NEÓN */
+        body::after {
+            content: ''; position: absolute; inset: 1.5vh;
+            border: 0.5vh solid var(--cian); border-radius: 20px;
+            pointer-events: none; z-index: 100;
+            box-shadow: 0 0 20px var(--cian), inset 0 0 20px var(--cian);
+            animation: parpadeoMarco 2s infinite;
+        }
+
+        @keyframes parpadeoMarco {
+            0%, 100% { border-color: var(--cian); box-shadow: 0 0 20px var(--cian), inset 0 0 20px var(--cian); }
+            50% { border-color: var(--magenta); box-shadow: 0 0 40px var(--magenta), inset 0 0 30px var(--magenta); }
+        }
+
+        #video-espejo { position: absolute; inset: 0; width: 100vw; height: 100vh; object-fit: cover; transform: scaleX(-1); z-index: 1; display: none; }
+        #preview-vivo {
+            position: absolute;
+            top: 2.5vh; left: 2.5vh; right: 2.5vh; bottom: 2.5vh;
+            width: calc(100% - 5vh); height: calc(100% - 5vh);
+            border-radius: 15px;          /* acompaña las esquinas del marco */
+            object-fit: cover;
+            background: #000;
+            z-index: 3; display: none;
+        }
+        #capa-oscuridad { position: absolute; inset: 0; background: radial-gradient(circle, #111 20%, #000 100%); z-index: 2; transition: 0.5s; }
+
+        #interfaz-gigante {
+            position: absolute; z-index: 10;
+            width: 88vw;
+            height: 96vh;
+            display: flex; flex-direction: column;
+            align-items: center; text-align: center;
+            justify-content: center;
+            box-sizing: border-box;
+        }
+
+        .pantalla { display: none; flex-direction: column; align-items: center; width: 100%; height: 100%; position: relative;}
+
+        /* ========== PANTALLA DE INICIO ========== */
+        #pantalla-inicio {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            height: 100%;
+            width: 100%;
+            padding: 3vh 0 1vh 0;
+            box-sizing: border-box;
+        }
+
+        .seccion-inicio-arriba { flex: 0 0 auto; width: 100%; }
+        h1 {
+            font-family: 'Poppins', sans-serif;
+            font-size: 15vw;
+            text-transform: uppercase;
+            margin: 0;
+            line-height: 0.9;
+            color: #fff;
+            animation: animH1Neon 3s infinite alternate;
+        }
+        @keyframes animH1Neon {
+            0% { text-shadow: 0 0 15px var(--cian), 0 0 30px var(--cian); }
+            100% { text-shadow: 0 0 20px var(--magenta), 0 0 40px var(--magenta); }
+        }
+
+        .seccion-inicio-medio { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; width: 100%; }
+        h2 {
+            font-family: 'Urbanist', sans-serif;
+            font-size: 8vw;
+            margin: 0;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            line-height: 1.2;
+            color: #fff;
+            animation: animH2Vibra 1.2s infinite alternate;
+        }
+        @keyframes animH2Vibra {
+            0% { transform: scale(0.97); text-shadow: 0 0 15px var(--cian); }
+            100% { transform: scale(1.03); text-shadow: 0 0 25px var(--cian), 0 0 40px #fff; }
+        }
+
+        .seccion-inicio-evento { flex: 0 0 auto; width: 100%; margin-bottom: 5vh; }
+        .footer-evento {
+            font-size: 5.5vw;
+            font-weight: 900;
+            text-transform: uppercase;
+            display: inline-block;
+            padding-bottom: 1vh;
+            position: relative;
+            animation: animEventoColor 2s infinite linear;
+        }
+        .footer-evento::after {
+            content: '';
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 0.8vh;
+            background: var(--cian);
+            box-shadow: 0 0 15px var(--cian), 0 0 25px var(--cian);
+            animation: animSubrayadoVibra 1.2s infinite alternate;
+            border-radius: 5px;
+        }
+        @keyframes animEventoColor {
+            0% { color: var(--cian); text-shadow: 0 0 10px var(--cian); }
+            25% { color: var(--verde); text-shadow: 0 0 10px var(--verde); }
+            50% { color: var(--amarillo); text-shadow: 0 0 10px var(--amarillo); }
+            75% { color: var(--magenta); text-shadow: 0 0 10px var(--magenta); }
+            100% { color: var(--cian); text-shadow: 0 0 10px var(--cian); }
+        }
+        @keyframes animSubrayadoVibra { from { opacity: 0.8; transform: scaleX(0.98); } to { opacity: 1; transform: scaleX(1.02); box-shadow: 0 0 20px var(--cian), 0 0 30px var(--cian); } }
+
+        .seccion-inicio-abajo {
+            flex: 0 0 auto; width: 100%;
+            display: flex; justify-content: space-between; align-items: center;
+            border-top: 1px solid rgba(255,255,255,0.15);
+            padding-top: 1.5vh;
+        }
+        .redes-texto-fijo { display: flex; flex-direction: column; text-align: left; gap: 0.6vh; color: #fff; font-size: 3vw; font-weight: bold; opacity: 0.8;}
+        .redes-texto-fijo i { width: 4vw; text-align: center; color: var(--cian); }
+        .qr-fijo-social { background: #fff; padding: 0.6vh; border-radius: 8px; border: 1px solid var(--cian); flex-shrink: 0;}
+
+        /* ========== MENÚS ========== */
+        .titulo-menu { color: #fff; font-size: 8vw; text-transform: uppercase; margin-bottom: 4vh; text-shadow: 0 0 15px var(--magenta); font-weight: 900; line-height: 1; }
+        .grid-opciones { display: flex; flex-direction: column; gap: 3vh; width: 100%; }
+
+        .opcion-menu {
+            background: rgba(255,255,255,0.05); border: 5px solid #222; border-radius: 30px;
+            padding: 4vh 20px; font-size: 7vw; font-weight: 900; color: #444;
+            text-transform: uppercase; transition: 0.3s; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; position: relative; overflow: hidden;
+        }
+        .opcion-menu span { font-size: 3.5vw; font-weight: normal; margin-top: 5px; opacity: 0.6; }
+
+        .opcion-menu.seleccionado {
+            background: rgba(0, 255, 255, 0.1); border-color: var(--cian); color: #fff;
+            transform: scale(1.05); box-shadow: 0 0 50px var(--cian), inset 0 0 20px var(--cian);
+        }
+        .opcion-menu.seleccionado.ia { border-color: var(--amarillo); box-shadow: 0 0 50px var(--amarillo); background: rgba(255, 234, 0, 0.1); }
+
+        /* ========== CUENTA REGRESIVA ========== */
+        #pantalla-cuenta { text-align: center; line-height: 1.2; display: flex; flex-direction: column; justify-content: center; position: relative; height: 100%; }
+        #texto-contador-fotos { position: absolute; top: 2vh; width: 100%; text-align: center; color: var(--amarillo); font-size: 6vw; font-weight: 900; text-shadow: 0 0 20px var(--amarillo); display: none; }
+        #numero-cuenta { font-size: 40vw; font-weight: 900; color: #fff; text-shadow: 0 0 60px var(--magenta); transition: 0.2s; margin: 0; white-space: pre-line; }
+
+        .spinner { width: 120px; height: 120px; border: 15px solid rgba(255,255,255,0.1); border-top: 15px solid var(--amarillo); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        #texto-procesando { color: #fff; font-size: 8vw; font-weight: 900; text-transform: uppercase; margin-top: 3vh; }
+
+        /* ========== RESULTADO ========== */
+        #pantalla-resultado { display: none; flex-direction: column; align-items: center; width: 100%; height: 100%; justify-content: center; background: #000; position: absolute; z-index: 20; padding: 4vh 5vw; box-sizing: border-box; }
+        #img-resultado { width: 100%; max-height: 72vh; object-fit: contain; border: 4px solid var(--cian); border-radius: 15px; box-shadow: 0 0 40px var(--cian); background: #111; margin-bottom: 2vh; }
+
+        .bloque-qr { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 20px; background: rgba(255,255,255,0.08); padding: 10px 20px; border-radius: 15px; width: auto; border: 2px solid var(--cian); min-height: 116px; }
+        #qr-final { background: #fff; padding: 8px; border-radius: 8px; }
+        #texto-qr { color: #fff; font-size: 3.5vw; font-weight: bold; text-align: left; line-height: 1.2; }
+        #barra-reset { position: absolute; bottom: 1vh; height: 0.6vh; background: var(--cian); box-shadow: 0 0 10px var(--cian); left: 0; width: 100%; transform-origin: left; }
+
+        #flash { position: fixed; inset: 0; background: #fff; z-index: 99999; opacity: 0; pointer-events: none; }
+        .disparo-flash { animation: flashBang 1.2s ease-out forwards; }
+        @keyframes flashBang { 0% { opacity: 1; background: #fff; } 10% { opacity: 1; background: #fff; } 100% { opacity: 0; background: #fff; } }
+
+        .preload-fonts { position: absolute; opacity: 0; pointer-events: none; }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, body::after { animation: none !important; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="preload-fonts">
+        <i class="fa-brands fa-instagram"></i>
+        <i class="fa-brands fa-whatsapp"></i>
+    </div>
+
+    <div id="flash"></div>
+
+    <video id="video-espejo" autoplay playsinline muted></video>
+    <video id="preview-vivo" autoplay playsinline muted></video>
+    <div id="capa-oscuridad"></div>
+
+    <div id="interfaz-gigante">
+
+        <div id="pantalla-inicio" class="pantalla">
+            <div class="seccion-inicio-arriba">
+                <h1>SIS<br>EVENTOS</h1>
+            </div>
+
+            <div class="seccion-inicio-medio">
+                <h2>TOCÁ EL MANDO<br>PARA INICIAR<br>LA MAGIA</h2>
+            </div>
+
+            <div class="seccion-inicio-evento">
+                <div class="footer-evento" id="txt-inicio-evento">CUMPLEAÑOS DE ANDRÉS - 22 DE MAYO 2026</div>
+            </div>
+
+            <div class="seccion-inicio-abajo">
+                <div class="redes-texto-fijo">
+                    <span><i class="fa-brands fa-instagram"></i> @sislive.uy</span>
+                    <span><i class="fa-brands fa-whatsapp"></i> +598 99 123 456</span>
+                </div>
+                <div id="qr-social-inicio" class="qr-fijo-social"></div>
+            </div>
+        </div>
+
+        <div id="pantalla-modos" class="pantalla">
+            <div class="titulo-menu">ELEGÍ TU EXPERIENCIA</div>
+            <div class="grid-opciones">
+                <div class="opcion-menu" id="opt-modos-0">📸 CABINA<br>CLÁSICA</div>
+                <div class="opcion-menu ia" id="opt-modos-1">✨ MAGIA<br>CON IA</div>
+            </div>
+        </div>
+
+        <div id="pantalla-clasica-cant" class="pantalla">
+            <div class="titulo-menu">¿CUÁNTAS FOTOS?</div>
+            <div class="grid-opciones">
+                <div class="opcion-menu" id="opt-cant-0">1 FOTO</div>
+                <div class="opcion-menu" id="opt-cant-1">3 FOTOS</div>
+            </div>
+        </div>
+
+        <div id="pantalla-tematicas" class="pantalla">
+            <div class="titulo-menu">ELEGÍ TU UNIVERSO</div>
+            <div class="grid-opciones" id="grilla-temas"></div>
+        </div>
+
+        <div id="pantalla-subtematicas" class="pantalla">
+            <div class="titulo-menu" id="titulo-subtemas">PERSONAJE</div>
+            <div class="grid-opciones" id="grilla-subtemas"></div>
+        </div>
+
+        <div id="pantalla-cuenta" class="pantalla">
+            <div id="texto-contador-fotos"></div>
+            <div id="numero-cuenta"></div>
+        </div>
+
+        <div id="pantalla-procesando" class="pantalla" style="justify-content:center;">
+            <div class="spinner"></div>
+            <div id="texto-procesando">CREANDO MAGIA...</div>
+        </div>
+    </div>
+
+    <div id="pantalla-resultado">
+        <img id="img-resultado" src="" alt="Tu foto">
+        <div class="bloque-qr">
+            <div id="qr-final"></div>
+            <div id="texto-qr">GUARDANDO<br><span style="color: var(--cian);">TU FOTO...</span></div>
+        </div>
+        <div id="barra-reset"></div>
+    </div>
+
+    <script>
+    (function () {
+        'use strict';
+
+        // ==============================================================
+        // CONFIGURACIÓN
+        // ==============================================================
+        const config = {
+            apiKey: "AIzaSyDBMvVVmltEnY5juq3MKXlDRTrbVdoacNM",
+            databaseURL: "https://sis-eventos-default-rtdb.firebaseio.com",
+            projectId: "sis-eventos",
+            storageBucket: "sis-eventos.firebasestorage.app"
+        };
+        firebase.initializeApp(config);
+        const db = firebase.database();
+        const storage = firebase.storage();
+
+        const id = new URLSearchParams(window.location.search).get('id') || "andres";
+
+        // URL del servidor en Render que habla con Leonardo AI.
+        // La API key vive del lado del servidor, nunca acá.
+        const URL_FUNCION_IA = "https://sislive-eventos-ia.onrender.com/generar";
+
+        // Dominio público donde el invitado ve/descarga su foto.
+        const BASE_GALERIA = "https://sislive.com.uy/f/";
+
+        // Cloudinary: donde se guardan las fotos (gratis, sin tarjeta)
+        const CLOUDINARY_CLOUD = "dki0l2b9";
+        const CLOUDINARY_PRESET = "espejo_sis";
+
+        const SEGUNDOS_RESET = 45;   // vuelve solo al inicio
+        const MARCA_INSTAGRAM = "@sislive.uy";
+        const MARCA_WHATSAPP  = "+598 99 123 456";
+
+        // ==============================================================
+        // TEMÁTICAS — personajes genéricos y propios (sin marcas de terceros)
+        // ==============================================================
+        // Los personajes ahora viven en la base de datos (editables desde el panel).
+        // Arranca vacío y se llena al leer de Firebase.
+        let datosIA = {};
+
+        db.ref(`eventos/${id}/personajes`).on('value', snap => {
+            const data = snap.val();
+            if (data) {
+                datosIA = data;
+                // Si estamos mirando el menú de universos, lo refrescamos
+                if (estadoActual === 'TEMATICAS') armarGrillaTemas();
+            }
+        });
+
+        // ==============================================================
+        // ESTADO
+        // ==============================================================
+        const videoElement = document.getElementById('video-espejo');
+        let streamCamara = null;
+        let fotosTomadasArr = [];
+        let cantidadFotosElegida = 1;
+
+        let estadoActual = 'INICIO';
+        let indiceSeleccion = 0;
+        let cantidadOpciones = 0;
+        let modoElegido = "";
+        let temaPadreElegido = 0;
+        let subTemaElegido = 0;        // FIX: se congela antes de cambiar de pantalla
+        let ultimoTsJoystick = 0;      // FIX: permite repetir la misma acción
+        let timerReset = null;
+        let textoFooterEvento = "CUMPLEAÑOS DE ANDRÉS - 22 DE MAYO 2026";
+
+        // ==============================================================
+        // FIREBASE: config del evento
+        // ==============================================================
+        db.ref(`eventos/${id}/config/texto_footer`).on('value', snap => {
+            if (snap.val()) {
+                textoFooterEvento = snap.val();
+                document.getElementById('txt-inicio-evento').innerText = textoFooterEvento;
+            }
+        });
+
+        new QRCode(document.getElementById("qr-social-inicio"), {
+            text: "https://www.instagram.com/sislive.uy", width: 60, height: 60
+        });
+
+        // ==============================================================
+        // CÁMARA — se abre UNA sola vez y queda viva
+        // ==============================================================
+        async function iniciarCamara() {
+            if (streamCamara) return true;
+            try {
+                streamCamara = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 1080 }, height: { ideal: 1920 } }
+                });
+                videoElement.srcObject = streamCamara;
+                await videoElement.play();
+                return true;
+            } catch (err) {
+                console.error("No se pudo abrir la cámara:", err);
+                return false;
+            }
+        }
+
+        function mostrarCamara(visible) {
+            videoElement.style.display = visible ? 'block' : 'none';
+            document.getElementById('capa-oscuridad').style.background =
+                visible ? 'transparent' : 'radial-gradient(circle, #111 20%, #000 100%)';
+        }
+
+        // La cámara ahora es el celular. La compu escucha la foto que llega.
+        let resolverFoto = null;   // se completa cuando el celu manda la imagen
+        let tsEsperado = 0;
+
+        db.ref(`eventos/${id}/foto_capturada`).on('value', snap => {
+            const data = snap.val();
+            if (!data || !data.img || !data.ts) return;
+            if (data.ts !== tsEsperado) return;   // no es la que estamos esperando
+            if (resolverFoto) {
+                const img = new Image();
+                img.onload = () => { const r = resolverFoto; resolverFoto = null; r(img); };
+                img.src = data.img;
+            }
+        });
+
+        // Muestra si el celu-cámara está conectado
+        db.ref(`eventos/${id}/camara/estado`).on('value', snap => {
+            const v = snap.val();
+            window.camaraViva = !!(v && v.vivo);
+        });
+
+        // ---- VIDEO EN VIVO (WebRTC) ----
+        // El monitor recibe el video real de la cámara y lo muestra durante "prepárate".
+        const SERVIDORES_ICE = {
+            iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" }
+            ]
+        };
+
+        const videoPreview = document.getElementById('preview-vivo');
+        const refWebrtc = db.ref(`eventos/${id}/webrtc`);
+        let pcMonitor = null;
+        let webrtcEnganchado = false;
+
+        function arrancarPreviewVivo() {
+            videoPreview.style.display = 'block';
+            conectarVideo();
+        }
+
+        function pararPreviewVivo() {
+            videoPreview.style.display = 'none';
+            if (pcMonitor) { try { pcMonitor.close(); } catch(e){} pcMonitor = null; }
+            videoPreview.srcObject = null;
+            refWebrtc.child('pedido').set(false);
+        }
+
+        async function conectarVideo() {
+            // Enganchamos los escuchas una sola vez
+            if (!webrtcEnganchado) {
+                webrtcEnganchado = true;
+
+                // Cuando la cámara publica su oferta, respondemos
+                refWebrtc.child('oferta').on('value', async snap => {
+                    const o = snap.val();
+                    if (!o || !pcMonitor) return;
+                    if (pcMonitor.currentRemoteDescription) return;
+                    await pcMonitor.setRemoteDescription(new RTCSessionDescription({ type: o.tipo, sdp: o.sdp }));
+                    const resp = await pcMonitor.createAnswer();
+                    await pcMonitor.setLocalDescription(resp);
+                    await refWebrtc.child('respuesta').set({ tipo: resp.type, sdp: resp.sdp });
+                });
+
+                // Rutas de red que manda la cámara
+                refWebrtc.child('ice_camara').on('child_added', async snap => {
+                    const c = snap.val();
+                    if (c && pcMonitor) { try { await pcMonitor.addIceCandidate(new RTCIceCandidate(c)); } catch(e){} }
+                });
+            }
+
+            // Armamos la conexión de este intento
+            if (pcMonitor) { try { pcMonitor.close(); } catch(e){} }
+            pcMonitor = new RTCPeerConnection(SERVIDORES_ICE);
+
+            pcMonitor.onicecandidate = e => {
+                if (e.candidate) refWebrtc.child('ice_monitor').push(e.candidate.toJSON());
+            };
+
+            // Cuando llega el video, lo mostramos
+            pcMonitor.ontrack = e => {
+                videoPreview.srcObject = e.streams[0];
+            };
+
+            // Le pedimos a la cámara que ofrezca su video
+            await refWebrtc.child('oferta').remove();
+            await refWebrtc.child('pedido').set(true);
+        }
+
+        // ==============================================================
+        // NAVEGACIÓN
+        // ==============================================================
+        function armarGrillaTemas() {
+            const grilla = document.getElementById('grilla-temas');
+            grilla.innerHTML = '';
+            Object.keys(datosIA).forEach((k, i) => {
+                grilla.innerHTML += `<div class="opcion-menu ia" id="opt-temas-${i}">${datosIA[k].titulo}</div>`;
+            });
+        }
+
+        function armarGrillaSubtemas(idPadre) {
+            const data = datosIA[idPadre];
+            document.getElementById('titulo-subtemas').innerText = data.titulo;
+            const grilla = document.getElementById('grilla-subtemas');
+            grilla.innerHTML = '';
+            Object.keys(data.subs).forEach((k, i) => {
+                grilla.innerHTML += `<div class="opcion-menu ia" id="opt-sub-${i}">${data.subs[k].nombre}</div>`;
+            });
+        }
+
+        function actualizarResaltado(prefijoDOM) {
+            for (let i = 0; i < 8; i++) {
+                const el = document.getElementById(prefijoDOM + i);
+                if (el) el.classList.remove('seleccionado');
+            }
+            const activo = document.getElementById(prefijoDOM + indiceSeleccion);
+            if (activo) activo.classList.add('seleccionado');
+        }
+
+        function programarReset(segundos) {
+            cancelarReset();
+            const barra = document.getElementById('barra-reset');
+            barra.style.transition = 'none';
+            barra.style.transform = 'scaleX(1)';
+            void barra.offsetWidth;
+            barra.style.transition = `transform ${segundos}s linear`;
+            barra.style.transform = 'scaleX(0)';
+            timerReset = setTimeout(() => cambiarEstado('INICIO'), segundos * 1000);
+        }
+
+        function cancelarReset() {
+            if (timerReset) { clearTimeout(timerReset); timerReset = null; }
+        }
+
+        function cambiarEstado(nuevoEstado) {
+            cancelarReset();
+            document.querySelectorAll('.pantalla').forEach(p => p.style.display = 'none');
+            document.getElementById('pantalla-resultado').style.display = 'none';
+            estadoActual = nuevoEstado;
+            indiceSeleccion = 0;
+
+            const divCuenta = document.getElementById('numero-cuenta');
+            divCuenta.innerText = "";
+            divCuenta.style.fontSize = "40vw";
+            document.getElementById('texto-contador-fotos').style.display = 'none';
+
+            if (estadoActual === 'INICIO') {
+                document.getElementById('pantalla-inicio').style.display = 'flex';
+                mostrarCamara(false);
+            }
+            else if (estadoActual === 'MODOS') {
+                document.getElementById('pantalla-modos').style.display = 'flex';
+                cantidadOpciones = 2; actualizarResaltado('opt-modos-');
+            }
+            else if (estadoActual === 'CLASICA_CANT') {
+                document.getElementById('pantalla-clasica-cant').style.display = 'flex';
+                cantidadOpciones = 2; actualizarResaltado('opt-cant-');
+            }
+            else if (estadoActual === 'TEMATICAS') {
+                armarGrillaTemas();
+                document.getElementById('pantalla-tematicas').style.display = 'flex';
+                cantidadOpciones = Object.keys(datosIA).length; actualizarResaltado('opt-temas-');
+            }
+            else if (estadoActual === 'SUBTEMATICAS') {
+                armarGrillaSubtemas(temaPadreElegido);
+                document.getElementById('pantalla-subtematicas').style.display = 'flex';
+                cantidadOpciones = Object.keys(datosIA[temaPadreElegido].subs).length; actualizarResaltado('opt-sub-');
+            }
+            else if (estadoActual === 'FOTO') {
+                document.getElementById('pantalla-cuenta').style.display = 'flex';
+                fotosTomadasArr = [];
+                if (!window.camaraViva) {
+                    avisarError("EL CELULAR-CÁMARA\nNO ESTÁ CONECTADO");
+                    return;
+                }
+                arrancarPreviewVivo();
+                arrancarSecuenciaFotos(1);
+            }
+        }
+
+        function avisarError(mensaje) {
+            document.querySelectorAll('.pantalla').forEach(p => p.style.display = 'none');
+            const p = document.getElementById('pantalla-cuenta');
+            p.style.display = 'flex';
+            const divCuenta = document.getElementById('numero-cuenta');
+            divCuenta.style.fontSize = "9vw";
+            divCuenta.style.color = "#fff";
+            divCuenta.innerText = mensaje;
+            setTimeout(() => cambiarEstado('INICIO'), 5000);
+        }
+
+        // ==============================================================
+        // JOYSTICK — ahora acepta la misma acción repetida
+        // ==============================================================
+        db.ref(`eventos/${id}/joystick`).on('value', snap => {
+            const data = snap.val();
+            if (!data || !data.accion) return;
+
+            // FIX: el mando escribe {accion, ts}. Ignoramos eventos ya procesados.
+            const ts = data.ts || 0;
+            if (ts && ts <= ultimoTsJoystick) return;
+            ultimoTsJoystick = ts;
+
+            manejarAccion(data.accion);
+        });
+
+        function manejarAccion(accion) {
+            const prefijo =
+                (estadoActual === 'MODOS')        ? 'opt-modos-' :
+                (estadoActual === 'CLASICA_CANT') ? 'opt-cant-'  :
+                (estadoActual === 'TEMATICAS')    ? 'opt-temas-' :
+                (estadoActual === 'SUBTEMATICAS') ? 'opt-sub-'   : "";
+
+            if (accion === 'iniciar' && estadoActual === 'INICIO') { cambiarEstado('MODOS'); return; }
+            // OK en los menús hace lo mismo que Siguiente
+            if (accion === 'iniciar' && estadoActual !== 'INICIO') { accion = 'siguiente'; }
+
+            if (prefijo !== "") {
+                if ((accion === 'abajo' || accion === 'derecha') && indiceSeleccion < cantidadOpciones - 1) indiceSeleccion++;
+                else if ((accion === 'arriba' || accion === 'izquierda') && indiceSeleccion > 0) indiceSeleccion--;
+                actualizarResaltado(prefijo);
+            }
+
+            if (accion === 'volver') {
+                if (estadoActual === 'MODOS') cambiarEstado('INICIO');
+                else if (estadoActual === 'CLASICA_CANT' || estadoActual === 'TEMATICAS') cambiarEstado('MODOS');
+                else if (estadoActual === 'SUBTEMATICAS') cambiarEstado('TEMATICAS');
+                else if (estadoActual === 'RESULTADO') cambiarEstado('INICIO');
+            }
+            else if (accion === 'siguiente') {
+                if (estadoActual === 'MODOS') {
+                    modoElegido = (indiceSeleccion === 0) ? 'clasica' : 'ia';
+                    cambiarEstado(modoElegido === 'clasica' ? 'CLASICA_CANT' : 'TEMATICAS');
+                }
+                else if (estadoActual === 'CLASICA_CANT') {
+                    cantidadFotosElegida = (indiceSeleccion === 0) ? 1 : 3;
+                    cambiarEstado('FOTO');
+                }
+                else if (estadoActual === 'TEMATICAS') {
+                    temaPadreElegido = Object.keys(datosIA)[indiceSeleccion];
+                    cambiarEstado('SUBTEMATICAS');
+                }
+                else if (estadoActual === 'SUBTEMATICAS') {
+                    subTemaElegido = Object.keys(datosIA[temaPadreElegido].subs)[indiceSeleccion];   // clave real
+                    cantidadFotosElegida = 1;
+                    cambiarEstado('FOTO');
+                }
+                else if (estadoActual === 'RESULTADO') cambiarEstado('INICIO');
+            }
+        }
+
+        // ==============================================================
+        // SECUENCIA DE FOTOS
+        // ==============================================================
+        function arrancarSecuenciaFotos(fotoActual) {
+            const divCuenta = document.getElementById('numero-cuenta');
+            const divInfo = document.getElementById('texto-contador-fotos');
+
+            if (cantidadFotosElegida > 1) {
+                divInfo.style.display = 'block';
+                divInfo.innerText = "FOTO " + fotoActual + " DE " + cantidadFotosElegida;
+            } else {
+                divInfo.style.display = 'none';
+            }
+
+            if (fotoActual === 1) {
+                divCuenta.style.fontSize = "10vw";
+                divCuenta.style.color = "#fff";
+                divCuenta.style.textShadow = "0 0 40px var(--magenta)";
+                divCuenta.innerText = "¡PREPARATE\nPARA LA MAGIA!";
+                setTimeout(() => ejecutarConteo(fotoActual), 3000);
+            } else {
+                divCuenta.innerText = "";
+                setTimeout(() => ejecutarConteo(fotoActual), 1500);
+            }
+        }
+
+        function ejecutarConteo(fotoActual) {
+            let cuenta = 5;
+            const divCuenta = document.getElementById('numero-cuenta');
+            divCuenta.style.fontSize = "40vw";
+            divCuenta.innerText = cuenta;
+            const coloresCuenta = ['#ffffff', '#00ffff', '#00ff00', '#ffea00', '#ff00ea', '#00ffff'];
+
+            const int = setInterval(() => {
+                cuenta--;
+                if (cuenta > 0) {
+                    divCuenta.style.color = coloresCuenta[cuenta];
+                    divCuenta.style.textShadow = `0 0 60px ${coloresCuenta[cuenta]}`;
+                }
+                if (cuenta === 5 || cuenta === 4) { divCuenta.innerText = cuenta; }
+                else if (cuenta === 3) { divCuenta.style.fontSize = "15vw"; divCuenta.innerText = "¡PREPARADOS!"; }
+                else if (cuenta === 2) { divCuenta.style.fontSize = "18vw"; divCuenta.innerText = "¡QUIETOS!"; }
+                else if (cuenta === 1) { divCuenta.style.fontSize = "25vw"; divCuenta.innerText = "¡FOTO!"; }
+
+                if (cuenta <= 0) {
+                    clearInterval(int);
+                    divCuenta.innerText = "";
+                    tomarFotoCanvas().then(imgCanvas => {
+                        fotosTomadasArr.push(imgCanvas);
+                        if (fotoActual < cantidadFotosElegida) {
+                            arrancarSecuenciaFotos(fotoActual + 1);
+                        } else {
+                            pararPreviewVivo();
+                            mostrarCamara(false);
+                            if (modoElegido === 'ia') {
+                                const personajeElegido = datosIA[temaPadreElegido].subs[subTemaElegido].nombre;
+                                motorInteligenciaArtificial(imgCanvas.src, personajeElegido);
+                            } else {
+                                procesarTiritaClasica();
+                            }
+                        }
+                    }).catch(() => {
+                        pararPreviewVivo();
+                        avisarError("LA CÁMARA NO RESPONDIÓ\nPROBÁ DE NUEVO");
+                    });
+                }
+            }, 1000);
+        }
+
+        function tomarFotoCanvas() {
+            return new Promise((res, rej) => {
+                // Destello en el monitor
+                const flashEl = document.getElementById('flash');
+                flashEl.classList.remove('disparo-flash');
+                void flashEl.offsetWidth;
+                flashEl.classList.add('disparo-flash');
+
+                // Le pedimos al celu que dispare, con un ts único
+                const ts = Date.now();
+                tsEsperado = ts;
+                resolverFoto = res;
+                db.ref(`eventos/${id}/disparo`).set({ ts: ts });
+
+                // Si en 8 segundos no llegó la foto, avisamos en vez de colgarnos
+                setTimeout(() => {
+                    if (resolverFoto) {
+                        resolverFoto = null;
+                        rej(new Error("timeout foto"));
+                    }
+                }, 8000);
+            });
+        }
+
+        // ==============================================================
+        // IA — la API key vive en la Cloud Function, no acá
+        // ==============================================================
+        async function motorInteligenciaArtificial(fotoCaraBase64, personaje) {
+            mostrarProcesando("CREANDO MAGIA...");
+
+            try {
+                const respuesta = await fetch(URL_FUNCION_IA, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        eventoId: id,
+                        personaje: personaje,
+                        cara: fotoCaraBase64
+                    })
+                });
+
+                if (!respuesta.ok) throw new Error("La IA respondió " + respuesta.status);
+
+                const datos = await respuesta.json();
+                // Leonardo devuelve una URL. La cargamos con crossOrigin para poder
+                // dibujarla en el canvas y ponerle el marco.
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.onload = () => componerYPublicar([img]);
+                img.onerror = () => componerYPublicar([fotosTomadasArr[0]]);
+                img.src = datos.url;
+
+            } catch (error) {
+                console.error("Error al procesar IA:", error);
+                componerYPublicar([fotosTomadasArr[0]]);  // nunca se queda colgado
+            }
+        }
+
+        function mostrarProcesando(texto) {
+            document.querySelectorAll('.pantalla').forEach(p => p.style.display = 'none');
+            document.getElementById('pantalla-resultado').style.display = 'none';
+            document.getElementById('texto-procesando').innerText = texto;
+            document.getElementById('pantalla-procesando').style.display = 'flex';
+        }
+
+        function procesarTiritaClasica() {
+            mostrarProcesando("ARMANDO TU TIRA...");
+            setTimeout(() => componerYPublicar(fotosTomadasArr), 500);
+        }
+
+        // ==============================================================
+        // COMPOSICIÓN — una sola función para clásica y para IA
+        // ==============================================================
+        function componerLienzo(imagenes) {
+            const canvasFinal = document.createElement('canvas');
+            const ctx = canvasFinal.getContext('2d');
+            const anchoFoto = 800;
+            const prop = imagenes[0].naturalHeight / imagenes[0].naturalWidth;
+            const altoFoto = anchoFoto * prop;
+            const margen = 40;
+            const altoFooter = 200;
+            const coloresBorde = ['#00ffff', '#ff00ea', '#ffea00'];
+            const n = imagenes.length;
+
+            canvasFinal.width = anchoFoto + (margen * 2);
+            canvasFinal.height = (altoFoto * n) + (margen * (n + 1)) + altoFooter;
+
+            ctx.fillStyle = "#0a0a0a";
+            ctx.fillRect(0, 0, canvasFinal.width, canvasFinal.height);
+
+            for (let i = 0; i < n; i++) {
+                const y = margen + (i * (altoFoto + margen));
+                ctx.drawImage(imagenes[i], margen, y, anchoFoto, altoFoto);
+                ctx.lineWidth = 10;
+                ctx.strokeStyle = coloresBorde[i % coloresBorde.length];
+                ctx.strokeRect(margen, y, anchoFoto, altoFoto);
+            }
+
+            // Marca del evento
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 35px 'Urbanist', Arial";
+            ctx.textAlign = "center";
+            ctx.fillText(textoFooterEvento, canvasFinal.width / 2, canvasFinal.height - 120);
+
+            // Redes
+            const startX = (canvasFinal.width / 2) - 260;
+            const baseY = canvasFinal.height - 50;
+            ctx.textAlign = "left";
+            ctx.font = '900 35px "Font Awesome 6 Brands"';
+            ctx.fillStyle = '#ff00ea'; ctx.fillText('\uf16d', startX, baseY);
+            ctx.font = "bold 28px 'Urbanist', Arial";
+            ctx.fillStyle = "#ffffff"; ctx.fillText(MARCA_INSTAGRAM, startX + 45, baseY - 5);
+            ctx.font = '900 35px "Font Awesome 6 Brands"';
+            ctx.fillStyle = '#00ff00'; ctx.fillText('\uf232', startX + 250, baseY);
+            ctx.font = "bold 28px 'Urbanist', Arial";
+            ctx.fillStyle = "#ffffff"; ctx.fillText(MARCA_WHATSAPP, startX + 295, baseY - 5);
+
+            return canvasFinal.toDataURL('image/jpeg', 0.85);
+        }
+
+        // ==============================================================
+        // PUBLICAR — muestra al instante, sube en paralelo, QR real
+        // ==============================================================
+        async function componerYPublicar(imagenes) {
+            let dataUrl;
+            try {
+                dataUrl = componerLienzo(imagenes);
+            } catch (e) {
+                console.error("No se pudo componer:", e);
+                dataUrl = imagenes[0].src;
+            }
+
+            mostrarResultado(dataUrl);   // el invitado ya ve su foto
+
+            const codigo = generarCodigo();
+
+            try {
+                // Subimos la foto a Cloudinary (gratis, sin tarjeta)
+                const form = new FormData();
+                form.append('file', dataUrl);
+                form.append('upload_preset', CLOUDINARY_PRESET);
+                form.append('public_id', `${id}_${codigo}`);
+
+                const resp = await fetch(
+                    `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`,
+                    { method: 'POST', body: form }
+                );
+
+                if (!resp.ok) throw new Error("Cloudinary respondió " + resp.status);
+
+                const data = await resp.json();
+                const urlFoto = data.secure_url;   // la URL pública de la foto
+
+                // La registramos en la base (esto es gratis en Firebase)
+                await db.ref(`eventos/${id}/fotos/${codigo}`).set({
+                    url: urlFoto,
+                    modo: modoElegido,
+                    tema: modoElegido === 'ia' ? datosIA[temaPadreElegido].subs[subTemaElegido].nombre : null,
+                    creada: firebase.database.ServerValue.TIMESTAMP
+                });
+
+                // El QR apunta directo a la foto en Cloudinary
+                pintarQR(urlFoto, "ESCANEÁ PARA<br><span style=\"color: var(--cian);\">LLEVARTE TU FOTO</span>");
+            } catch (e) {
+                console.error("No se pudo subir la foto:", e);
+                pintarQR(BASE_GALERIA, "PEDÍ TU FOTO<br><span style=\"color: var(--cian);\">AL OPERADOR</span>");
+            }
+        }
+
+        function generarCodigo() {
+            const abc = "abcdefghijkmnpqrstuvwxyz23456789";
+            let s = "";
+            for (let i = 0; i < 8; i++) s += abc[Math.floor(Math.random() * abc.length)];
+            return s;
+        }
+
+        function pintarQR(texto, html) {
+            const qr = document.getElementById('qr-final');
+            qr.innerHTML = "";
+            new QRCode(qr, { text: texto, width: 100, height: 100 });
+            document.getElementById('texto-qr').innerHTML = html;
+        }
+
+        function mostrarResultado(f) {
+            document.querySelectorAll('.pantalla').forEach(p => p.style.display = 'none');
+            estadoActual = 'RESULTADO';
+            document.getElementById('pantalla-resultado').style.display = 'flex';
+            document.getElementById('img-resultado').src = f;
+            document.getElementById('qr-final').innerHTML = "";
+            document.getElementById('texto-qr').innerHTML = 'GUARDANDO<br><span style="color: var(--cian);">TU FOTO...</span>';
+            programarReset(SEGUNDOS_RESET);
+        }
+
+        // ==============================================================
+        // TECLADO — para probar sin el mando
+        // ==============================================================
+        document.addEventListener('keydown', e => {
+            const mapa = {
+                ArrowUp: 'arriba', ArrowDown: 'abajo',
+                ArrowLeft: 'izquierda', ArrowRight: 'derecha',
+                Enter: estadoActual === 'INICIO' ? 'iniciar' : 'siguiente',
+                Escape: 'volver'
+            };
+            if (mapa[e.key]) { e.preventDefault(); manejarAccion(mapa[e.key]); }
+        });
+
+        cambiarEstado('INICIO');
+    })();
+    </script>
+</body>
+</html>
