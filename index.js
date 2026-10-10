@@ -7,11 +7,37 @@ app.use(cors({ origin: (origin, cb) => cb(null, true) }));
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const DB_URL = "https://sis-eventos-default-rtdb.firebaseio.com";
 
-// Estilo base y negativo: siguen en el servidor (son globales, no se editan por personaje).
-const ESTILO = "keep every person from the original photo, between one and four people, each face kept clearly recognizable, natural realistic faces, faces fully visible and not covered, professional event photo booth portrait, even flattering lighting, sharp focus, high detail, vibrant colors, cinematic photography";
-const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
+// Regla común a TODOS los personajes: respeta la identidad real de cada persona
+// y le pone a cada uno la versión de su propio género y edad. Así el grupo mixto
+// (y la foto de una persona) salen bien en una sola pasada.
+const REGLA_PERSONAS =
+  " IMPORTANT: this photo may contain one or more people. Keep every real person exactly: " +
+  "the same faces, the same number of people, and each person's own skin tone, age and gender — " +
+  "never change anyone's gender or age, and never add or remove real people. " +
+  "When the theme includes a costume or character look, give EACH person individually the version that matches " +
+  "THEIR OWN gender and age: men and boys get the masculine version, women and girls get the feminine version, " +
+  "and children get a child-appropriate version. You may add themed background characters, animals or props as described. " +
+  "Natural and flattering, high quality, photorealistic.";
+
+const PERSONAJES = {
+  "MURGUISTA":         "Turn each person into a colorful Uruguayan carnival murga performer with a bright striped costume and painted carnival face, on a festive stage with warm lighting.",
+  "CANDOMBERO":        "Turn each person into an Uruguayan candombe carnival performer with a tambor drum, in a warm nighttime street-carnival atmosphere with glowing lanterns.",
+  "GAUCHO":            "Place everyone in a rural Uruguayan pampa at sunset and dress each person in traditional countryside attire: men and boys as gauchos with hat, neckerchief and poncho, women and girls as 'chinas'/paisanas in traditional country dresses.",
+  "HINCHA CELESTE":    "Surround everyone with a festive sky-blue and white Uruguay football-supporters celebration: confetti, flags, scarves and a stadium atmosphere, with celebratory supporter gear for each person.",
+  "SAFARI":            "Place everyone in an African safari scene with golden savannah light and a friendly lion sitting calmly nearby; dress each person as a safari explorer.",
+  "ASTRONAUTA":        "Place everyone in a space scene floating among planets and stars; dress each person in an astronaut spacesuit with the helmet visible.",
+  "PIRATA":            "Place everyone on the wooden deck of a pirate ship with an open treasure chest and the ocean behind, adventurous cinematic lighting; dress each person as a pirate with hats and coats.",
+  "BUZO":              "Place everyone in an underwater diving scene with colorful fish and coral reef and sun rays through the water; dress each person in scuba diving gear.",
+  "PRINCESA DE HIELO": "Transform the scene into a magical ice palace with sparkling snow, ice crystals and cold blue lighting; dress each person in royal ice-palace attire: women and girls as elegant ice princesses with crystal tiaras and icy gowns, men and boys as ice kings or princes with frosted crowns and royal cloaks.",
+  "SIRENA":            "Place everyone in an enchanted underwater kingdom with glowing seashells and soft light; give each person a sea-royalty look: women and girls as mermaids with shimmering tails, men and boys as mermen or sea princes.",
+  "HADA DEL BOSQUE":   "Surround everyone with a magical enchanted forest with glowing fairy lights and soft dreamy lighting; give each person a woodland look: women and girls as forest fairies with delicate translucent wings, men and boys as forest elves or sprites.",
+  "REINA MEDIEVAL":    "Place everyone in a medieval castle throne room with warm torch lighting; dress each person as medieval royalty: women and girls as queens or princesses with elegant crowns and gowns, men and boys as kings or princes with crowns and royal mantles.",
+  "HÉROE DEL TRUENO":  "Surround everyone with a dramatic thunder-god theme with lightning, storm clouds and glowing energy, epic cinematic lighting; give each person armor and glowing energy: men and boys as thunder gods, women and girls as thunder goddesses.",
+  "GUERRERA AMAZONA":  "Surround everyone with an epic warrior theme on a battlefield sky with heroic light and golden armor accents; give each person a warrior look: women and girls as amazon warrior princesses, men and boys as heroic warriors.",
+  "SOMBRA NOCTURNA":   "Surround everyone with a dark masked night-hero theme over a dramatic nighttime city skyline with moody blue light; dress each person as a sleek masked night hero with a cape.",
+  "VELOCISTA":         "Surround everyone with a speedster superhero theme with motion-blur energy trails and glowing lightning, dynamic cinematic light; dress each person in a sleek speedster suit.",
+};
 
 const MODELO = "gemini-2.5-flash-image";
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -21,18 +47,14 @@ app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA — OK"));
 app.post("/generar", async (req, res) => {
   try {
     if (!KEY) return res.status(500).json({ error: "Falta LEONARDO_API_KEY" });
-    const { cara, personaje, eventoId } = req.body || {};
+    const { cara, personaje } = req.body || {};
     if (!cara || !cara.startsWith("data:image/")) return res.status(400).json({ error: "Falta la foto" });
-    if (!personaje) return res.status(400).json({ error: "Falta el personaje" });
-
-    // Buscamos el prompt del personaje en la base de datos (editable desde el panel)
-    const escena = await buscarPromptEnBase(eventoId || "andres", personaje);
-    if (!escena) return res.status(400).json({ error: "Personaje sin prompt: " + personaje });
-
-    const prompt = escena + ". " + ESTILO;
+    const base = PERSONAJES[personaje];
+    if (!base) return res.status(400).json({ error: "Personaje desconocido: " + personaje });
+    const instruccion = base + REGLA_PERSONAS;
 
     const idImagen = await subirCara(cara);
-    const genId = await pedirGeneracion(idImagen, prompt);
+    const genId = await pedirGeneracion(idImagen, instruccion);
     const urlFinal = await esperarResultado(genId);
     return res.status(200).json({ url: urlFinal });
   } catch (e) {
@@ -40,23 +62,6 @@ app.post("/generar", async (req, res) => {
     return res.status(500).json({ error: "No se pudo generar la foto" });
   }
 });
-
-// Lee la biblioteca compartida y busca el personaje por nombre
-async function buscarPromptEnBase(eventoId, nombrePersonaje) {
-  const r = await fetch(`${DB_URL}/biblioteca/universos.json`);
-  if (!r.ok) return null;
-  const universos = await r.json();
-  if (!universos) return null;
-  for (const uKey of Object.keys(universos)) {
-    const subs = universos[uKey].subs || {};
-    for (const sKey of Object.keys(subs)) {
-      if (subs[sKey].nombre === nombrePersonaje) {
-        return subs[sKey].prompt || null;
-      }
-    }
-  }
-  return null;
-}
 
 async function subirCara(base64) {
   const r1 = await fetch(`${LEONARDO}/v1/init-image`, {
@@ -81,16 +86,14 @@ async function subirCara(base64) {
   return imageId;
 }
 
-async function pedirGeneracion(idImagen, prompt) {
+async function pedirGeneracion(idImagen, instruccion) {
   const r = await fetch(`${LEONARDO}/v2/generations`, {
     method: "POST",
     headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
     body: JSON.stringify({
-      public: false,
       model: MODELO,
       parameters: {
-        prompt: prompt,
-        negative_prompt: NEGATIVO,
+        prompt: instruccion,
         width: 1024,
         height: 1024,
         prompt_enhance: "OFF",
@@ -104,9 +107,10 @@ async function pedirGeneracion(idImagen, prompt) {
   let d = {};
   try { d = JSON.parse(texto); } catch (e) {}
   const genId =
-    (d.generate && d.generate.generationId) ||
     (d.sdGenerationJob && d.sdGenerationJob.generationId) ||
     (d.generations_by_pk && d.generations_by_pk.id) ||
+    (d.generation && d.generation.id) ||
+    (d.data && d.data.id) ||
     d.generationId || d.id;
   if (!genId) throw new Error("no vino el id de generacion");
   return genId;
