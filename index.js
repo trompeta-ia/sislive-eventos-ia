@@ -20,6 +20,15 @@ const REGLA_PERSONAS =
   "and children get a child-appropriate version. You may add themed background characters, animals or props as described. " +
   "Natural and flattering, high quality, photorealistic.";
 
+// Regla para los OBJETOS (QR mágico): NO disfraza a nadie, mantiene la foto
+// normal y solo mete el objeto en la mano de quien levanta la cartita.
+const REGLA_OBJETOS =
+  " IMPORTANT: keep this looking like the real everyday photo. Keep every person exactly as they are — " +
+  "the same faces, bodies, clothes, hair, skin tone, age and gender, and the same number of people — " +
+  "do NOT restyle, costume or change anyone. Only add the described object, placed naturally in the hand " +
+  "of whoever is holding up a small card or raising their hand (replacing that card). Make the object " +
+  "fun and photorealistic, matching the photo's lighting and perspective.";
+
 const PERSONAJES = {
   "MURGUISTA":         "Turn each person into a colorful Uruguayan carnival murga performer with a bright striped costume and painted carnival face, on a festive stage with warm lighting.",
   "CANDOMBERO":        "Turn each person into an Uruguayan candombe carnival performer with a tambor drum, in a warm nighttime street-carnival atmosphere with glowing lanterns.",
@@ -39,6 +48,19 @@ const PERSONAJES = {
   "VELOCISTA":         "Surround everyone with a speedster superhero theme with motion-blur energy trails and glowing lightning, dynamic cinematic light; dress each person in a sleek speedster suit.",
 };
 
+// ---- OBJETOS (QR mágico): la cartita se transforma en un objeto en la mano ----
+// La foto queda normal; solo aparece el objeto. Sirve para foto de 1 o de varios.
+const OBJETOS = {
+  "MAMADERA":       "Add a huge funny oversized baby bottle held in the person's raised hand (replacing the small card).",
+  "ESPADA":         "Add an epic glowing fantasy sword held in the person's raised hand (replacing the small card).",
+  "WHISKY":         "Add a giant oversized bottle of whisky held in the person's raised hand (replacing the small card), humorous party vibe.",
+  "DINOSAURIO":     "Make it look like the person is holding and lifting up a small friendly cartoon baby dinosaur in their arms (replacing the small card they were holding).",
+  "MICROFONO":      "Add a shiny stage microphone held in the person's raised hand (replacing the small card), as if they are singing.",
+  "TROFEO":         "Add a big golden champion trophy raised in the person's hand (replacing the small card).",
+  "RAMO DE FLORES": "Add a big beautiful bouquet of flowers held in the person's raised hand (replacing the small card).",
+  "GUITARRA":       "Add a cool electric guitar held in the person's hands (replacing the small card).",
+};
+
 const MODELO = "gemini-2.5-flash-image";
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -49,9 +71,10 @@ app.post("/generar", async (req, res) => {
     if (!KEY) return res.status(500).json({ error: "Falta LEONARDO_API_KEY" });
     const { cara, personaje } = req.body || {};
     if (!cara || !cara.startsWith("data:image/")) return res.status(400).json({ error: "Falta la foto" });
-    const base = PERSONAJES[personaje];
-    if (!base) return res.status(400).json({ error: "Personaje desconocido: " + personaje });
-    const instruccion = base + REGLA_PERSONAS;
+    let instruccion = null;
+    if (PERSONAJES[personaje])     instruccion = PERSONAJES[personaje] + REGLA_PERSONAS;
+    else if (OBJETOS[personaje])   instruccion = OBJETOS[personaje] + REGLA_OBJETOS;
+    if (!instruccion) return res.status(400).json({ error: "Personaje desconocido: " + personaje });
 
     const idImagen = await subirCara(cara);
     const genId = await pedirGeneracion(idImagen, instruccion);
