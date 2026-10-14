@@ -135,6 +135,7 @@ async function pedirGeneracion(idImagen, instruccion) {
   let d = {};
   try { d = JSON.parse(texto); } catch (e) {}
   const genId =
+    (d.generate && d.generate.generationId) ||
     (d.sdGenerationJob && d.sdGenerationJob.generationId) ||
     (d.generations_by_pk && d.generations_by_pk.id) ||
     (d.generation && d.generation.id) ||
