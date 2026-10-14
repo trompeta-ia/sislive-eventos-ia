@@ -115,6 +115,7 @@ async function pedirGeneracion(idImagen, instruccion) {
     headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
     body: JSON.stringify({
       model: MODELO,
+      public: false,
       parameters: {
         prompt: instruccion,
         width: 1024,
