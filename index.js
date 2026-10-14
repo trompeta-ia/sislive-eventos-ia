@@ -8,6 +8,9 @@ app.use(cors({ origin: (origin, cb) => cb(null, true) }));
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
 
+// Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
+const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
+
 // Regla común a TODOS los personajes: respeta la identidad real de cada persona
 // y le pone a cada uno la versión de su propio género y edad. Así el grupo mixto
 // (y la foto de una persona) salen bien en una sola pasada.
@@ -118,6 +121,7 @@ async function pedirGeneracion(idImagen, instruccion) {
       public: false,
       parameters: {
         prompt: instruccion,
+        negative_prompt: NEGATIVO,
         width: 1024,
         height: 1024,
         prompt_enhance: "OFF",
