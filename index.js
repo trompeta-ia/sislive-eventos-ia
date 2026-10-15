@@ -64,6 +64,38 @@ const OBJETOS = {
   "GUITARRA":       "Add a cool electric guitar held in the person's hands (replacing the small card).",
 };
 
+// ---- CARICATURAS (modo propio) ----
+// Caricatura de la cara: exagera rasgos pero la persona se reconoce.
+const REGLA_CARICATURA =
+  " Make it a caricature of THIS person's face: exaggerate the most distinctive features in a fun, " +
+  "flattering way, but keep the person clearly recognizable (same hair, same general look). " +
+  "One person, centered portrait. Clean, high quality.";
+
+const CARICATURAS = {
+  "CARICATURA LINEA": "Black-and-white hand-drawn line caricature, like a street caricature artist: a big expressive head on a small body, confident black ink pen strokes, plain white background, a small handwritten signature at the bottom.",
+  "CARICATURA COLOR": "Colorful hand-drawn caricature with a big head and small body, exaggerated friendly features, soft shading and clean coloring, simple light studio background.",
+  "CARICATURA 3D":    "Cute 3D animated Pixar-style caricature, big expressive eyes and stylized exaggerated features, soft studio lighting, simple pleasant background.",
+};
+
+// ---- ACCESORIOS (cabina clásica, foto de 1): sumar un accesorio simpático ----
+const REGLA_ACCESORIO =
+  " Keep the photo looking like the real everyday photo — keep the person(s) exactly (same faces, bodies, clothes, age, gender, and the same number of people). Only add the described item in a fun, natural, photorealistic way, matching the lighting.";
+const ACCESORIOS = {
+  "GORRO":  "Add a fun colorful party hat on top of the person's head.",
+  "LENTES": "Add cool stylish sunglasses on the person's face.",
+  "CORONA": "Add a shiny golden crown on top of the person's head.",
+};
+
+// ---- EFECTOS (cabina clásica, foto de 3: solo la última, divertido) ----
+const REGLA_EFECTO =
+  " Apply this as a fun, eye-catching style to the whole photo, but keep the person(s) clearly recognizable (same faces and pose). High quality.";
+const EFECTOS = {
+  "COMIC":          "Turn the photo into a fun comic-book / pop-art style: bold black outlines, bright flat colors and halftone dots, like a comic panel.",
+  "DIBUJO ANIMADO": "Turn the photo into a fun cartoon / animated style with clean outlines and bright cheerful colors.",
+  "POP ART":        "Turn the photo into a vibrant Andy-Warhol-style pop-art with bright flat high-contrast colors.",
+  "VINTAGE":        "Turn the photo into a warm vintage look: soft sepia tones, gentle film grain and an old-photo feel, but still clearly the person.",
+};
+
 const MODELO = "gemini-2.5-flash-image";
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -75,8 +107,11 @@ app.post("/generar", async (req, res) => {
     const { cara, personaje } = req.body || {};
     if (!cara || !cara.startsWith("data:image/")) return res.status(400).json({ error: "Falta la foto" });
     let instruccion = null;
-    if (PERSONAJES[personaje])     instruccion = PERSONAJES[personaje] + REGLA_PERSONAS;
-    else if (OBJETOS[personaje])   instruccion = OBJETOS[personaje] + REGLA_OBJETOS;
+    if (PERSONAJES[personaje])         instruccion = PERSONAJES[personaje] + REGLA_PERSONAS;
+    else if (OBJETOS[personaje])       instruccion = OBJETOS[personaje] + REGLA_OBJETOS;
+    else if (CARICATURAS[personaje])   instruccion = CARICATURAS[personaje] + REGLA_CARICATURA;
+    else if (ACCESORIOS[personaje])    instruccion = ACCESORIOS[personaje] + REGLA_ACCESORIO;
+    else if (EFECTOS[personaje])       instruccion = EFECTOS[personaje] + REGLA_EFECTO;
     if (!instruccion) return res.status(400).json({ error: "Personaje desconocido: " + personaje });
 
     const idImagen = await subirCara(cara);
