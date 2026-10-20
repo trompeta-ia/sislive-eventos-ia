@@ -136,17 +136,31 @@ function medirImagen(dataUrl) {
   return null;
 }
 
-// Calcula el tamaño de salida respetando el formato de la foto (lado mayor 1024).
+// Medidas que ACEPTA el modelo gemini-2.5-flash-image en Leonardo.
+// Elegimos la más parecida al formato de la foto (vertical / cuadrada / horizontal).
+const TAMANOS = [
+  { W: 768,  H: 1344 }, // 0.571  vertical muy alta (9:16 aprox)
+  { W: 832,  H: 1248 }, // 0.667  vertical 2:3
+  { W: 768,  H: 1024 }, // 0.750  vertical 3:4 (típica de celular)
+  { W: 896,  H: 1152 }, // 0.778  vertical
+  { W: 896,  H: 896  }, // 1.000  cuadrada
+  { W: 1152, H: 864  }, // 1.333  horizontal 4:3
+  { W: 1248, H: 832  }, // 1.500  horizontal 3:2
+  { W: 1536, H: 864  }, // 1.778  horizontal 16:9
+];
+
+// Calcula el tamaño de salida eligiendo la medida VÁLIDA más cercana al
+// formato real de la foto (así no se corre ni se recorta la persona).
 function calcularTamano(dataUrl) {
   const dim = medirImagen(dataUrl);
-  if (!dim || !dim.w || !dim.h) return { W: 1024, H: 1024 };
-  const MAX = 1024, MIN = 512;
-  let W, H;
-  if (dim.w >= dim.h) { W = MAX; H = Math.round((MAX * dim.h) / dim.w); }
-  else { H = MAX; W = Math.round((MAX * dim.w) / dim.h); }
-  W = Math.min(MAX, Math.max(MIN, Math.round(W / 16) * 16));
-  H = Math.min(MAX, Math.max(MIN, Math.round(H / 16) * 16));
-  return { W, H };
+  if (!dim || !dim.w || !dim.h) return { W: 896, H: 896 };
+  const ar = dim.w / dim.h;
+  let best = TAMANOS[0], diff = Infinity;
+  for (const t of TAMANOS) {
+    const d = Math.abs((t.W / t.H) - ar);
+    if (d < diff) { diff = d; best = t; }
+  }
+  return { W: best.W, H: best.H };
 }
 
 app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA — OK"));
