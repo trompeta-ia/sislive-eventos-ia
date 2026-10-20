@@ -26,11 +26,12 @@ const REGLA_PERSONAS =
 // Regla para los OBJETOS (QR mágico): NO disfraza a nadie, mantiene la foto
 // normal y solo mete el objeto en la mano de quien levanta la cartita.
 const REGLA_OBJETOS =
-  " IMPORTANT: keep this looking like the real everyday photo. Keep every person exactly as they are — " +
-  "the same faces, bodies, clothes, hair, skin tone, age and gender, and the same number of people — " +
-  "do NOT restyle, costume or change anyone. Only add the described object, placed naturally in the hand " +
-  "of whoever is holding up a small card or raising their hand (replacing that card). Make the object " +
-  "fun and photorealistic, matching the photo's lighting and perspective.";
+  " IMPORTANT: keep this EXACTLY like the original everyday photo — same framing and composition, " +
+  "same camera angle and zoom, same background. Do NOT crop, zoom, rotate or move the person, and do NOT " +
+  "shift anyone to the side. Keep every person exactly as they are — the same faces, bodies, clothes, hair, " +
+  "skin tone, age and gender, and the same number of people — do NOT restyle, costume or change anyone. " +
+  "Only add the described object, placed naturally in one of the person's hands, photorealistic and matching " +
+  "the photo's lighting and perspective.";
 
 const PERSONAJES = {
   "MURGUISTA":         "Turn each person into a colorful Uruguayan carnival murga performer with a bright striped costume and painted carnival face, on a festive stage with warm lighting.",
@@ -54,14 +55,14 @@ const PERSONAJES = {
 // ---- OBJETOS (QR mágico): la cartita se transforma en un objeto en la mano ----
 // La foto queda normal; solo aparece el objeto. Sirve para foto de 1 o de varios.
 const OBJETOS = {
-  "MAMADERA":       "Add a huge funny oversized baby bottle held in the person's raised hand (replacing the small card).",
-  "ESPADA":         "Add an epic glowing fantasy sword held in the person's raised hand (replacing the small card).",
-  "WHISKY":         "Add a giant oversized bottle of whisky held in the person's raised hand (replacing the small card), humorous party vibe.",
-  "DINOSAURIO":     "Make it look like the person is holding and lifting up a small friendly cartoon baby dinosaur in their arms (replacing the small card they were holding).",
-  "MICROFONO":      "Add a shiny stage microphone held in the person's raised hand (replacing the small card), as if they are singing.",
-  "TROFEO":         "Add a big golden champion trophy raised in the person's hand (replacing the small card).",
-  "RAMO DE FLORES": "Add a big beautiful bouquet of flowers held in the person's raised hand (replacing the small card).",
-  "GUITARRA":       "Add a cool electric guitar held in the person's hands (replacing the small card).",
+  "MAMADERA":       "Add a big funny oversized baby bottle held naturally in one of the person's hands.",
+  "ESPADA":         "Add an epic glowing fantasy sword held naturally in one of the person's hands.",
+  "WHISKY":         "Add a big oversized bottle of whisky held naturally in one of the person's hands, humorous party vibe.",
+  "DINOSAURIO":     "Make it look like the person is holding a small friendly cartoon baby dinosaur in their arms.",
+  "MICROFONO":      "Add a shiny stage microphone held naturally in one of the person's hands, as if they are singing.",
+  "TROFEO":         "Add a big golden champion trophy held up in one of the person's hands.",
+  "RAMO DE FLORES": "Add a big beautiful bouquet of flowers held naturally in one of the person's hands.",
+  "GUITARRA":       "Add a cool electric guitar held naturally in the person's hands.",
 };
 
 // ---- CARICATURAS (modo propio) ----
@@ -79,7 +80,10 @@ const CARICATURAS = {
 
 // ---- ACCESORIOS (cabina clásica, foto de 1): sumar un accesorio simpático ----
 const REGLA_ACCESORIO =
-  " Keep the photo looking like the real everyday photo — keep the person(s) exactly (same faces, bodies, clothes, age, gender, and the same number of people). Only add the described item in a fun, natural, photorealistic way, matching the lighting.";
+  " IMPORTANT: keep this EXACTLY like the original photo — same framing and composition, same camera angle and zoom, " +
+  "same background. Do NOT crop, zoom, rotate or move the person, and do NOT shift anyone to the side. " +
+  "Keep the person(s) exactly (same faces, bodies, clothes, age, gender, and the same number of people). " +
+  "Only add the described item in a fun, natural, photorealistic way, matching the lighting.";
 const ACCESORIOS = {
   "GORRO":  "Add a fun colorful party hat on top of the person's head.",
   "LENTES": "Add cool stylish sunglasses on the person's face.",
@@ -88,7 +92,9 @@ const ACCESORIOS = {
 
 // ---- EFECTOS (cabina clásica, foto de 3: solo la última, divertido) ----
 const REGLA_EFECTO =
-  " Apply this as a fun, eye-catching style to the whole photo, but keep the person(s) clearly recognizable (same faces and pose). High quality.";
+  " Apply this as a fun, eye-catching style to the WHOLE photo, keeping the same framing and composition " +
+  "(do NOT crop, zoom or move the person), and keep the person(s) clearly recognizable (same faces, same pose, " +
+  "same number of people). High quality.";
 const EFECTOS = {
   "COMIC":          "Turn the photo into a fun comic-book / pop-art style: bold black outlines, bright flat colors and halftone dots, like a comic panel.",
   "DIBUJO ANIMADO": "Turn the photo into a fun cartoon / animated style with clean outlines and bright cheerful colors.",
@@ -98,6 +104,50 @@ const EFECTOS = {
 
 const MODELO = "gemini-2.5-flash-image";
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Mide el ancho y alto reales de la foto (JPEG o PNG) a partir del dataURL,
+// así generamos en el MISMO formato (vertical/horizontal) y la persona no se
+// corre al costado ni se recorta.
+function medirImagen(dataUrl) {
+  try {
+    const base64 = dataUrl.split(",")[1];
+    const buf = Buffer.from(base64, "base64");
+    // PNG: firma + IHDR con ancho/alto en big-endian
+    if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50) {
+      return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+    }
+    // JPEG: busco el marcador SOF (donde vienen alto y ancho)
+    if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+      let o = 2;
+      while (o < buf.length - 9) {
+        if (buf[o] !== 0xff) { o++; continue; }
+        const marker = buf[o + 1];
+        // Marcadores SOF (tamaño de la imagen), evitando los que no lo son
+        if (marker >= 0xc0 && marker <= 0xcf &&
+            marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          return { h: buf.readUInt16BE(o + 5), w: buf.readUInt16BE(o + 7) };
+        }
+        const len = buf.readUInt16BE(o + 2);
+        if (len <= 0) break;
+        o += 2 + len;
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+// Calcula el tamaño de salida respetando el formato de la foto (lado mayor 1024).
+function calcularTamano(dataUrl) {
+  const dim = medirImagen(dataUrl);
+  if (!dim || !dim.w || !dim.h) return { W: 1024, H: 1024 };
+  const MAX = 1024, MIN = 512;
+  let W, H;
+  if (dim.w >= dim.h) { W = MAX; H = Math.round((MAX * dim.h) / dim.w); }
+  else { H = MAX; W = Math.round((MAX * dim.w) / dim.h); }
+  W = Math.min(MAX, Math.max(MIN, Math.round(W / 16) * 16));
+  H = Math.min(MAX, Math.max(MIN, Math.round(H / 16) * 16));
+  return { W, H };
+}
 
 app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA — OK"));
 
@@ -114,8 +164,9 @@ app.post("/generar", async (req, res) => {
     else if (EFECTOS[personaje])       instruccion = EFECTOS[personaje] + REGLA_EFECTO;
     if (!instruccion) return res.status(400).json({ error: "Personaje desconocido: " + personaje });
 
+    const tam = calcularTamano(cara);
     const idImagen = await subirCara(cara);
-    const genId = await pedirGeneracion(idImagen, instruccion);
+    const genId = await pedirGeneracion(idImagen, instruccion, tam);
     const urlFinal = await esperarResultado(genId);
     return res.status(200).json({ url: urlFinal });
   } catch (e) {
@@ -147,7 +198,9 @@ async function subirCara(base64) {
   return imageId;
 }
 
-async function pedirGeneracion(idImagen, instruccion) {
+async function pedirGeneracion(idImagen, instruccion, tam) {
+  const W = (tam && tam.W) || 1024;
+  const H = (tam && tam.H) || 1024;
   const r = await fetch(`${LEONARDO}/v2/generations`, {
     method: "POST",
     headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
@@ -157,8 +210,8 @@ async function pedirGeneracion(idImagen, instruccion) {
       parameters: {
         prompt: instruccion,
         negative_prompt: NEGATIVO,
-        width: 1024,
-        height: 1024,
+        width: W,
+        height: H,
         prompt_enhance: "OFF",
         guidances: { image_reference: [ { image: { id: idImagen, type: "UPLOADED" } } ] },
       },
