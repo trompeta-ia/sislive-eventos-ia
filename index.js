@@ -212,9 +212,26 @@ async function subirCara(base64) {
   return imageId;
 }
 
-async function pedirGeneracion(idImagen, instruccion, tam) {
-  const W = (tam && tam.W) || 1024;
-  const H = (tam && tam.H) || 1024;
+// Devuelve el valor de la lista más cercano al deseado.
+function masCercano(lista, valor) {
+  let best = lista[0], diff = Infinity;
+  for (const v of lista) { const d = Math.abs(v - valor); if (d < diff) { diff = d; best = v; } }
+  return best;
+}
+
+// Saca el generationId de cualquiera de las formas que devuelve Leonardo.
+function sacarGenId(d) {
+  return (d.generate && d.generate.generationId) ||
+    (d.sdGenerationJob && d.sdGenerationJob.generationId) ||
+    (d.generations_by_pk && d.generations_by_pk.id) ||
+    (d.generation && d.generation.id) ||
+    (d.data && d.data.id) ||
+    d.generationId || d.id || null;
+}
+
+// Un intento de generación. Devuelve { genId } si salió, o { permitidosW, permitidosH }
+// si Leonardo rechazó la medida (para reintentar), o {} si falló por otra cosa.
+async function intentarGeneracion(idImagen, instruccion, W, H) {
   const r = await fetch(`${LEONARDO}/v2/generations`, {
     method: "POST",
     headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
@@ -232,19 +249,37 @@ async function pedirGeneracion(idImagen, instruccion, tam) {
     }),
   });
   const texto = await r.text();
-  console.log("RESPUESTA LEONARDO (status " + r.status + "):", texto);
-  if (!r.ok) throw new Error("generacion fallo: " + r.status);
+  console.log("RESPUESTA LEONARDO (" + W + "x" + H + ", status " + r.status + "):", texto);
   let d = {};
   try { d = JSON.parse(texto); } catch (e) {}
-  const genId =
-    (d.generate && d.generate.generationId) ||
-    (d.sdGenerationJob && d.sdGenerationJob.generationId) ||
-    (d.generations_by_pk && d.generations_by_pk.id) ||
-    (d.generation && d.generation.id) ||
-    (d.data && d.data.id) ||
-    d.generationId || d.id;
-  if (!genId) throw new Error("no vino el id de generacion");
-  return genId;
+  const genId = sacarGenId(d);
+  if (genId) return { genId };
+  // ¿La rechazó por la medida? Leonardo lista las medidas válidas para ESTA foto.
+  const mW = texto.match(/width must be one of:\s*([0-9,\s]+)/i);
+  const mH = texto.match(/height must be one of:\s*([0-9,\s]+)/i);
+  if (mW && mH) {
+    const permitidosW = mW[1].split(",").map(s => parseInt(s.trim(), 10)).filter(n => n > 0);
+    const permitidosH = mH[1].split(",").map(s => parseInt(s.trim(), 10)).filter(n => n > 0);
+    if (permitidosW.length && permitidosH.length) return { permitidosW, permitidosH };
+  }
+  return {};
+}
+
+async function pedirGeneracion(idImagen, instruccion, tam) {
+  let W = (tam && tam.W) || 896;
+  let H = (tam && tam.H) || 896;
+  // 1er intento con la medida parecida al formato de la foto
+  let res = await intentarGeneracion(idImagen, instruccion, W, H);
+  if (res.genId) return res.genId;
+  // Si la rechazó, uso las medidas que Leonardo dijo que acepta para ESTA foto
+  if (res.permitidosW && res.permitidosH) {
+    W = masCercano(res.permitidosW, W);
+    H = masCercano(res.permitidosH, H);
+    console.log("Reintento con medida valida de Leonardo:", W + "x" + H);
+    res = await intentarGeneracion(idImagen, instruccion, W, H);
+    if (res.genId) return res.genId;
+  }
+  throw new Error("no vino el id de generacion");
 }
 
 async function esperarResultado(genId) {
