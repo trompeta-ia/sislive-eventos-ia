@@ -138,15 +138,18 @@ function medirImagen(dataUrl) {
 
 // Medidas que ACEPTA el modelo gemini-2.5-flash-image en Leonardo.
 // Elegimos la más parecida al formato de la foto (vertical / cuadrada / horizontal).
+// Solo medidas que Leonardo acepta SIEMPRE (están en todas las listas que devuelve).
 const TAMANOS = [
   { W: 768,  H: 1344 }, // 0.571  vertical muy alta (9:16 aprox)
   { W: 832,  H: 1248 }, // 0.667  vertical 2:3
   { W: 768,  H: 1024 }, // 0.750  vertical 3:4 (típica de celular)
   { W: 896,  H: 1152 }, // 0.778  vertical
+  { W: 864,  H: 1024 }, // 0.844  vertical suave
   { W: 896,  H: 896  }, // 1.000  cuadrada
-  { W: 1152, H: 864  }, // 1.333  horizontal 4:3
-  { W: 1248, H: 832  }, // 1.500  horizontal 3:2
-  { W: 1536, H: 864  }, // 1.778  horizontal 16:9
+  { W: 1184, H: 896  }, // 1.321  horizontal 4:3 aprox
+  { W: 1248, H: 896  }, // 1.393  horizontal
+  { W: 1184, H: 672  }, // 1.762  horizontal ancha (16:9 aprox)
+  { W: 1248, H: 672  }, // 1.857  horizontal muy ancha
 ];
 
 // Calcula el tamaño de salida eligiendo la medida VÁLIDA más cercana al
@@ -268,17 +271,24 @@ async function intentarGeneracion(idImagen, instruccion, W, H) {
 async function pedirGeneracion(idImagen, instruccion, tam) {
   let W = (tam && tam.W) || 896;
   let H = (tam && tam.H) || 896;
-  // 1er intento con la medida parecida al formato de la foto
-  let res = await intentarGeneracion(idImagen, instruccion, W, H);
-  if (res.genId) return res.genId;
-  // Si la rechazó, uso las medidas que Leonardo dijo que acepta para ESTA foto
-  if (res.permitidosW && res.permitidosH) {
-    W = masCercano(res.permitidosW, W);
-    H = masCercano(res.permitidosH, H);
-    console.log("Reintento con medida valida de Leonardo:", W + "x" + H);
-    res = await intentarGeneracion(idImagen, instruccion, W, H);
+  // Hasta 4 intentos: Leonardo cambia la lista de medidas válidas en cada
+  // llamada, así que si rechaza, reajusto a lo que diga y vuelvo a probar.
+  for (let intento = 0; intento < 4; intento++) {
+    const res = await intentarGeneracion(idImagen, instruccion, W, H);
     if (res.genId) return res.genId;
+    if (res.permitidosW && res.permitidosH) {
+      W = masCercano(res.permitidosW, W);
+      H = masCercano(res.permitidosH, H);
+      console.log("Reintento con medida:", W + "x" + H);
+      continue;
+    }
+    break; // si el error no es por la medida, no tiene sentido insistir
   }
+  // Red de seguridad: medida automática (0x0 siempre está permitido) para que
+  // el modelo elija el tamaño según la foto y nunca quede en 500.
+  console.log("Ultimo recurso: medida automatica 0x0");
+  const auto = await intentarGeneracion(idImagen, instruccion, 0, 0);
+  if (auto.genId) return auto.genId;
   throw new Error("no vino el id de generacion");
 }
 
