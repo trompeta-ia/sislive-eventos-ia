@@ -7,7 +7,7 @@ app.use(cors({ origin: (origin, cb) => cb(null, true) }));
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v4 · medidas validas + reintentos + 0x0";
+const VERSION = "ia-v5 · prompt de biblioteca + medidas validas";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -172,7 +172,7 @@ app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA — OK — " + VER
 app.post("/generar", async (req, res) => {
   try {
     if (!KEY) return res.status(500).json({ error: "Falta LEONARDO_API_KEY" });
-    const { cara, personaje } = req.body || {};
+    const { cara, personaje, prompt } = req.body || {};
     if (!cara || !cara.startsWith("data:image/")) return res.status(400).json({ error: "Falta la foto" });
     let instruccion = null;
     if (PERSONAJES[personaje])         instruccion = PERSONAJES[personaje] + REGLA_PERSONAS;
@@ -180,6 +180,10 @@ app.post("/generar", async (req, res) => {
     else if (CARICATURAS[personaje])   instruccion = CARICATURAS[personaje] + REGLA_CARICATURA;
     else if (ACCESORIOS[personaje])    instruccion = ACCESORIOS[personaje] + REGLA_ACCESORIO;
     else if (EFECTOS[personaje])       instruccion = EFECTOS[personaje] + REGLA_EFECTO;
+    // Personaje de la biblioteca (no es de los fijos): usa el prompt que se
+    // configuró en el administrador para ESE personaje. Así cualquier personaje
+    // nuevo funciona sin tocar el servidor.
+    else if (prompt && String(prompt).trim()) instruccion = String(prompt).trim() + REGLA_PERSONAS;
     if (!instruccion) return res.status(400).json({ error: "Personaje desconocido: " + personaje });
 
     const tam = calcularTamano(cara);
