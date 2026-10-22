@@ -7,6 +7,7 @@ app.use(cors({ origin: (origin, cb) => cb(null, true) }));
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
+const VERSION = "ia-v4 · medidas validas + reintentos + 0x0";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -166,7 +167,7 @@ function calcularTamano(dataUrl) {
   return { W: best.W, H: best.H };
 }
 
-app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA — OK"));
+app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA — OK — " + VERSION));
 
 app.post("/generar", async (req, res) => {
   try {
@@ -308,4 +309,4 @@ async function esperarResultado(genId) {
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Servidor SIS Eventos IA escuchando en " + PORT));
+app.listen(PORT, () => console.log("Servidor SIS Eventos IA (" + VERSION + ") escuchando en " + PORT));
