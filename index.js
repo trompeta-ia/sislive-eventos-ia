@@ -7,7 +7,7 @@ app.use(cors({ origin: (origin, cb) => cb(null, true) }));
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v5 · prompt de biblioteca + medidas validas";
+const VERSION = "ia-v6 · con credito";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -168,6 +168,31 @@ function calcularTamano(dataUrl) {
 }
 
 app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA — OK — " + VERSION));
+
+// Saldo / crédito de Leonardo (para ver cuánto queda antes de un evento)
+app.get("/credito", async (_req, res) => {
+  try {
+    if (!KEY) return res.status(500).json({ error: "Falta LEONARDO_API_KEY" });
+    const r = await fetch(`${LEONARDO}/v1/me`, { headers: { authorization: `Bearer ${KEY}` } });
+    const texto = await r.text();
+    if (!r.ok) return res.status(500).json({ error: "Leonardo " + r.status, detalle: texto });
+    let d = {}; try { d = JSON.parse(texto); } catch (e) {}
+    const u = (d.user_details && d.user_details[0]) || {};
+    const pagos = Number(u.apiPaidTokens || 0);
+    const plan = Number(u.apiSubscriptionTokens || 0);
+    return res.status(200).json({
+      ok: true,
+      tokensPagos: pagos,
+      tokensPlan: plan,
+      tokensTotal: pagos + plan,
+      costoPorFoto: 0.0389,   // US$ por generación aprox.
+      renovacion: u.apiPlanTokenRenewalDate || u.paidTokenRenewalDate || u.tokenRenewalDate || null,
+      detalle: u              // por si cambian los nombres de los campos
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 app.post("/generar", async (req, res) => {
   try {
