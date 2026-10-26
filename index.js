@@ -3,11 +3,42 @@ const cors = require("cors");
 
 const app = express();
 app.use(express.json({ limit: "12mb" }));
-app.use(cors({ origin: (origin, cb) => cb(null, true) }));
+
+// ---- SEGURIDAD ----
+// Token compartido con el espejo. Se puede cambiar poniendo APP_TOKEN en Render.
+const TOKEN = process.env.APP_TOKEN || "sis-espejo-7q2m9x4k";
+// CORS: solo el dominio del espejo (y localhost para pruebas). Otros dominios: bloqueados.
+const ORIGENES_OK = [
+  "https://sis-eventos.web.app",
+  "https://sis-eventos.firebaseapp.com"
+];
+app.use(cors({ origin: (origin, cb) => {
+  if (!origin) return cb(null, true);                                   // curl / health / apps sin origen
+  if (ORIGENES_OK.includes(origin) || /^https?:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
+  return cb(null, false);                                               // dominio no permitido
+} }));
+
+// Límite simple por IP: frena que alguien dispare miles de pedidos y te queme créditos.
+const golpesPorIP = new Map();
+function limitarIP(req, res, next) {
+  const ip = String(req.headers["x-forwarded-for"] || req.ip || "").split(",")[0].trim();
+  const ahora = Date.now(), ventana = 60 * 1000, maximo = 30;
+  const reg = golpesPorIP.get(ip) || { t: ahora, n: 0 };
+  if (ahora - reg.t > ventana) { reg.t = ahora; reg.n = 0; }
+  reg.n++; golpesPorIP.set(ip, reg);
+  if (reg.n > maximo) return res.status(429).json({ error: "Demasiados pedidos, esperá un minuto" });
+  next();
+}
+// Token: rechaza cualquier pedido que no traiga la llave correcta.
+function chequearToken(req, res, next) {
+  const t = req.headers["x-app-token"] || (req.body && req.body.token);
+  if (t !== TOKEN) return res.status(403).json({ error: "No autorizado" });
+  next();
+}
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v7 · caricaturas famosos";
+const VERSION = "ia-v8 · seguridad (token + limite)";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -179,7 +210,7 @@ function calcularTamano(dataUrl) {
 app.get("/", (_req, res) => res.send("Servidor SIS Eventos IA — OK — " + VERSION));
 
 // Saldo / crédito de Leonardo (para ver cuánto queda antes de un evento)
-app.get("/credito", async (_req, res) => {
+app.get("/credito", chequearToken, async (_req, res) => {
   try {
     if (!KEY) return res.status(500).json({ error: "Falta LEONARDO_API_KEY" });
     const r = await fetch(`${LEONARDO}/v1/me`, { headers: { authorization: `Bearer ${KEY}` } });
@@ -203,7 +234,7 @@ app.get("/credito", async (_req, res) => {
   }
 });
 
-app.post("/generar", async (req, res) => {
+app.post("/generar", limitarIP, chequearToken, async (req, res) => {
   try {
     if (!KEY) return res.status(500).json({ error: "Falta LEONARDO_API_KEY" });
     const { cara, personaje, prompt } = req.body || {};
