@@ -7,7 +7,7 @@ app.use(cors({ origin: (origin, cb) => cb(null, true) }));
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v6 · con credito";
+const VERSION = "ia-v7 · caricaturas famosos";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -72,6 +72,15 @@ const REGLA_CARICATURA =
   " Make it a caricature of THIS person's face: exaggerate the most distinctive features in a fun, " +
   "flattering way, but keep the person clearly recognizable (same hair, same general look). " +
   "One person, centered portrait. Clean, high quality.";
+
+// Regla para CARICATURAS DE FAMOSOS (biblioteca): el prompt dice "caricature ...".
+// Mantiene a la persona reconocible pero en estilo caricatura/dibujo (NO realista),
+// y permite dibujar al famoso/personaje al lado, en el mismo estilo.
+const REGLA_CARICATURA_FAMOSO =
+  " Draw EVERY real person in this photo as a fun, flattering caricature that still looks clearly like them " +
+  "(same face, hair, skin tone, age and gender — never change anyone's gender or age, and never add or remove real people). " +
+  "Render the WHOLE image in one consistent hand-drawn caricature / cartoon style, NOT photorealistic. " +
+  "Draw the described famous character next to them in the same caricature style. Cheerful, flattering and high quality.";
 
 const CARICATURAS = {
   "CARICATURA LINEA": "Black-and-white hand-drawn line caricature, like a street caricature artist: a big expressive head on a small body, confident black ink pen strokes, plain white background, a small handwritten signature at the bottom.",
@@ -208,7 +217,11 @@ app.post("/generar", async (req, res) => {
     // Personaje de la biblioteca (no es de los fijos): usa el prompt que se
     // configuró en el administrador para ESE personaje. Así cualquier personaje
     // nuevo funciona sin tocar el servidor.
-    else if (prompt && String(prompt).trim()) instruccion = String(prompt).trim() + REGLA_PERSONAS;
+    else if (prompt && String(prompt).trim()) {
+      const p = String(prompt).trim();
+      // Si el prompt es de caricatura (famosos), usa la regla de caricatura en vez de la realista.
+      instruccion = p + (/caricatur/i.test(p) ? REGLA_CARICATURA_FAMOSO : REGLA_PERSONAS);
+    }
     if (!instruccion) return res.status(400).json({ error: "Personaje desconocido: " + personaje });
 
     const tam = calcularTamano(cara);
