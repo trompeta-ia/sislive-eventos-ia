@@ -1,15 +1,17 @@
 {
-  "name": "sislive_eventos",
-  "version": "1.0.0",
-  "description": "Servidor intermedio que conecta el espejo SIS con Leonardo AI",
+  "name": "sislive-eventos-ia",
+  "version": "1.9.0",
+  "description": "Servidor IA + editor de video 360 para el Espejo Mágico de SIS Eventos",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^4.19.2",
-    "cors": "^2.8.5"
+    "ffmpeg-static": "^5.2.0"
   }
 }
