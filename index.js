@@ -1,5 +1,10 @@
 const express = require("express");
 const cors = require("cors");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { execFile } = require("child_process");
+const FFMPEG = require("ffmpeg-static");   // binario de ffmpeg incluido (no hace falta instalarlo en Render)
 
 const app = express();
 app.use(express.json({ limit: "12mb" }));
@@ -38,7 +43,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v8 · seguridad (token + limite)";
+const VERSION = "ia-v10 · 360 pro + portada de revista";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -143,6 +148,23 @@ const EFECTOS = {
   "VINTAGE":        "Turn the photo into a warm vintage look: soft sepia tones, gentle film grain and an old-photo feel, but still clearly the person.",
 };
 
+// ---- PORTADA DE REVISTA ----
+// La IA hace la PINTA de tapa de revista (persona como modelo de portada) y DEJA
+// lugar arriba y en los costados para el texto. El texto (nombre de la revista y
+// frases) lo pone el espejo con canvas, para que salga nítido y diga lo que queremos.
+const REGLA_REVISTA =
+  " IMPORTANT: keep every real person exactly — the same faces, the same number of people, and each " +
+  "person's own skin tone, age and gender (never change anyone's gender or age, never add or remove people). " +
+  "Turn the shot into a professional, glossy MAGAZINE COVER photo of the person: confident cover-model pose, " +
+  "editorial studio lighting, high-end retouching, vertical cover framing. Leave clear EMPTY SPACE at the TOP " +
+  "for a magazine title, and clean margins on the sides for cover lines. Do NOT draw any text, letters, numbers, " +
+  "words, captions or logos anywhere — keep those areas clean. Photorealistic, flattering, high quality.";
+const REVISTAS = {
+  "REVISTA MODA":      "High-fashion glossy magazine cover look (Vogue / Elle style): elegant and chic styling, trendy editorial fashion wardrobe and makeup, soft luxury studio background.",
+  "REVISTA DEPORTES":  "Sports magazine cover look: athletic, energetic and powerful, dynamic sporty styling and lighting, stadium or gym editorial background, strong confident hero pose.",
+  "REVISTA FARANDULA": "Celebrity entertainment magazine cover look: red-carpet glamour, bright flashy showbiz styling, star-quality charisma, glamorous spotlight background.",
+};
+
 const MODELO = "gemini-2.5-flash-image";
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -245,6 +267,7 @@ app.post("/generar", limitarIP, chequearToken, async (req, res) => {
     else if (CARICATURAS[personaje])   instruccion = CARICATURAS[personaje] + REGLA_CARICATURA;
     else if (ACCESORIOS[personaje])    instruccion = ACCESORIOS[personaje] + REGLA_ACCESORIO;
     else if (EFECTOS[personaje])       instruccion = EFECTOS[personaje] + REGLA_EFECTO;
+    else if (REVISTAS[personaje])      instruccion = REVISTAS[personaje] + REGLA_REVISTA;
     // Personaje de la biblioteca (no es de los fijos): usa el prompt que se
     // configuró en el administrador para ESE personaje. Así cualquier personaje
     // nuevo funciona sin tocar el servidor.
@@ -380,6 +403,128 @@ async function esperarResultado(genId) {
   }
   throw new Error("timeout esperando la imagen");
 }
+
+// =====================================================================
+//  EDITOR DE VIDEO 360 (flow motion PRO): lento -> boomerang -> lento
+//  El celular sube el video crudo a Cloudinary y nos manda la URL.
+//  Acá lo bajamos, lo editamos por tramos, le pegamos la musica adentro
+//  del archivo y tu logo, lo subimos a Cloudinary y devolvemos la URL final.
+// =====================================================================
+const CLOUD_NAME = process.env.CLOUDINARY_CLOUD || "dki0l2b9";
+const CLOUD_PRESET = process.env.CLOUDINARY_PRESET || "espejo_sis";
+const LOGO_TEXTO = process.env.LOGO_360 || "%40sislive.uy";   // @sislive.uy
+const ENC = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"];
+const ESCALA = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
+
+// Corre ffmpeg y espera a que termine.
+function correrFF(args) {
+  return new Promise((resolve, reject) => {
+    execFile(FFMPEG, args, { maxBuffer: 1024 * 1024 * 64 }, (err, _out, stderr) => {
+      if (err) return reject(new Error("ffmpeg: " + String(stderr || err.message).slice(-600)));
+      resolve(stderr || "");
+    });
+  });
+}
+// Duracion de un video leyendo el stderr de ffmpeg (no hace falta ffprobe).
+function duracionVideo(file) {
+  return new Promise((resolve) => {
+    execFile(FFMPEG, ["-i", file], (_e, _o, stderr) => {
+      const m = String(stderr || "").match(/Duration:\s*(\d+):(\d+):(\d+\.\d+)/);
+      resolve(m ? (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]) : 0);
+    });
+  });
+}
+// Baja un archivo (video o musica) de una URL a disco.
+async function bajarArchivo(url, dest) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("descarga " + r.status);
+  fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
+}
+// Sube el video terminado a Cloudinary (mismo preset sin firma que usa el celular).
+async function subirCloudinary(file) {
+  const buf = fs.readFileSync(file);
+  const form = new FormData();
+  form.append("file", new Blob([buf], { type: "video/mp4" }), "video360.mp4");
+  form.append("upload_preset", CLOUD_PRESET);
+  const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/video/upload`, { method: "POST", body: form });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.secure_url) throw new Error("cloudinary " + ((d.error && d.error.message) || r.status));
+  return d.secure_url;
+}
+
+// El corazon del asunto: arma el video por tramos con distintas velocidades.
+async function armar360(raw, music, out, trabajo) {
+  const D = await duracionVideo(raw);
+  if (!D || D < 2) throw new Error("video ilegible o muy corto (D=" + D + ")");
+
+  // Limites proporcionales a la duracion real (anda grabe 10, 12 o 15s).
+  const b1 = +(D * 0.30).toFixed(2);   // tramo 1: LENTO
+  const b2 = +(D * 0.47).toFixed(2);   // tramo 2: BOOMERANG
+  const b3 = +(D * 0.78).toFixed(2);   // tramo 3: LENTO
+  const d1 = b1, d2 = +(b2 - b1).toFixed(2), d3 = +(b3 - b2).toFixed(2);
+
+  const s1 = path.join(trabajo, "s1.mp4");
+  const s2 = path.join(trabajo, "s2.mp4");
+  const s3 = path.join(trabajo, "s3.mp4");
+
+  // Tramo 1 — LENTO (0.5x)
+  await correrFF(["-y", "-ss", "0", "-t", String(d1), "-i", raw,
+    "-vf", `setpts=2.0*(PTS-STARTPTS),fps=30,${ESCALA}`, "-an", ...ENC, s1]);
+  // Tramo 2 — BOOMERANG (ida + vuelta)
+  await correrFF(["-y", "-ss", String(b1), "-t", String(d2), "-i", raw,
+    "-filter_complex", `[0:v]setpts=(PTS-STARTPTS),fps=30,${ESCALA},split=2[f][r];[r]reverse[rr];[f][rr]concat=n=2:v=1:a=0[v]`,
+    "-map", "[v]", "-an", ...ENC, s2]);
+  // Tramo 3 — LENTO (0.5x)
+  await correrFF(["-y", "-ss", String(b2), "-t", String(d3), "-i", raw,
+    "-vf", `setpts=2.0*(PTS-STARTPTS),fps=30,${ESCALA}`, "-an", ...ENC, s3]);
+
+  const totalOut = (await duracionVideo(s1)) + (await duracionVideo(s2)) + (await duracionVideo(s3));
+  const stFade = Math.max(0.1, totalOut - 1).toFixed(2);
+  const dur = Math.max(1, totalOut).toFixed(2);
+
+  const lista = path.join(trabajo, "lista.txt");
+  fs.writeFileSync(lista, [s1, s2, s3].map(f => `file '${f.replace(/'/g, "")}'`).join("\n"));
+
+  // Junta los tramos (copia el video ya codificado = rapido) y pega la musica.
+  if (music) {
+    await correrFF(["-y", "-f", "concat", "-safe", "0", "-i", lista,
+      "-stream_loop", "-1", "-i", music,
+      "-filter_complex", `[1:a]afade=t=in:d=0.6,afade=t=out:st=${stFade}:d=1,volume=1.0[a]`,
+      "-map", "0:v", "-c:v", "copy", "-map", "[a]", "-c:a", "aac", "-b:a", "160k",
+      "-t", dur, "-movflags", "+faststart", out]);
+  } else {
+    await correrFF(["-y", "-f", "concat", "-safe", "0", "-i", lista,
+      "-map", "0:v", "-c:v", "copy", "-an", "-t", dur, "-movflags", "+faststart", out]);
+  }
+  return { D, totalOut };
+}
+
+app.post("/procesar360", limitarIP, chequearToken, async (req, res) => {
+  const { videoUrl, musicaUrl } = req.body || {};
+  if (!videoUrl || !/^https?:\/\//.test(videoUrl)) return res.status(400).json({ error: "falta videoUrl" });
+  const trabajo = fs.mkdtempSync(path.join(os.tmpdir(), "v360-"));
+  try {
+    const raw = path.join(trabajo, "raw");
+    await bajarArchivo(videoUrl, raw);
+
+    let music = null;
+    if (musicaUrl && /^https?:\/\//.test(musicaUrl)) {
+      try { music = path.join(trabajo, "musica.mp3"); await bajarArchivo(musicaUrl, music); }
+      catch (e) { music = null; }   // si falla la musica, igual armamos el video
+    }
+
+    const out = path.join(trabajo, "final.mp4");
+    const info = await armar360(raw, music, out, trabajo);
+    const url = await subirCloudinary(out);
+    console.log("procesar360 OK:", info, "->", url);
+    return res.status(200).json({ url, duracion: info.totalOut });
+  } catch (e) {
+    console.error("procesar360 ERROR:", e.message);
+    return res.status(500).json({ error: "No se pudo procesar el video 360" });
+  } finally {
+    try { fs.rmSync(trabajo, { recursive: true, force: true }); } catch (e) {}
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Servidor SIS Eventos IA (" + VERSION + ") escuchando en " + PORT));
