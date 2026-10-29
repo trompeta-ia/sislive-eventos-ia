@@ -15,7 +15,10 @@ const TOKEN = process.env.APP_TOKEN || "sis-espejo-7q2m9x4k";
 // CORS: solo el dominio del espejo (y localhost para pruebas). Otros dominios: bloqueados.
 const ORIGENES_OK = [
   "https://sis-eventos.web.app",
-  "https://sis-eventos.firebaseapp.com"
+  "https://sis-eventos.firebaseapp.com",
+  "https://momovil.app",
+  "https://carnaval-2026-7cd07.web.app",
+  "https://carnaval-2026-7cd07.firebaseapp.com"
 ];
 app.use(cors({ origin: (origin, cb) => {
   if (!origin) return cb(null, true);                                   // curl / health / apps sin origen
@@ -403,6 +406,82 @@ async function esperarResultado(genId) {
   }
   throw new Error("timeout esperando la imagen");
 }
+
+// =====================================================================
+//  GENERAR FONDO / MARCO para las placas de MOMÓVIL (texto -> imagen).
+//  A diferencia de /generar, acá NO hay foto de entrada: es texto puro.
+//  Se omite 'guidances' para que Leonardo haga text-to-image.
+// =====================================================================
+const REGLA_FONDO = " High quality, vibrant and richly detailed image, good for a social media graphic. " +
+  "Do NOT draw any text, letters, numbers, words, captions, watermarks or logos anywhere.";
+
+async function intentarFondo(instruccion, W, H) {
+  const r = await fetch(`${LEONARDO}/v2/generations`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: MODELO,
+      public: false,
+      parameters: {
+        prompt: instruccion,
+        negative_prompt: NEGATIVO,
+        width: W,
+        height: H,
+        prompt_enhance: "OFF",
+      },
+    }),
+  });
+  const texto = await r.text();
+  console.log("RESPUESTA LEONARDO FONDO (" + W + "x" + H + ", status " + r.status + "):", texto);
+  let d = {};
+  try { d = JSON.parse(texto); } catch (e) {}
+  const genId = sacarGenId(d);
+  if (genId) return { genId };
+  const mW = texto.match(/width must be one of:\s*([0-9,\s]+)/i);
+  const mH = texto.match(/height must be one of:\s*([0-9,\s]+)/i);
+  if (mW && mH) {
+    const permitidosW = mW[1].split(",").map(s => parseInt(s.trim(), 10)).filter(n => n > 0);
+    const permitidosH = mH[1].split(",").map(s => parseInt(s.trim(), 10)).filter(n => n > 0);
+    if (permitidosW.length && permitidosH.length) return { permitidosW, permitidosH };
+  }
+  return {};
+}
+
+async function pedirFondo(instruccion, W, H) {
+  for (let intento = 0; intento < 4; intento++) {
+    const res = await intentarFondo(instruccion, W, H);
+    if (res.genId) return res.genId;
+    if (res.permitidosW && res.permitidosH) {
+      W = masCercano(res.permitidosW, W);
+      H = masCercano(res.permitidosH, H);
+      console.log("Reintento fondo con medida:", W + "x" + H);
+      continue;
+    }
+    break;
+  }
+  const auto = await intentarFondo(instruccion, 0, 0);
+  if (auto.genId) return auto.genId;
+  throw new Error("no vino el id de generacion (fondo)");
+}
+
+app.post("/generar-fondo", limitarIP, chequearToken, async (req, res) => {
+  try {
+    if (!KEY) return res.status(500).json({ error: "Falta LEONARDO_API_KEY" });
+    const { prompt, formato } = req.body || {};
+    const p = String(prompt || "").trim();
+    if (!p) return res.status(400).json({ error: "Falta el prompt" });
+    // feed = cuadrada (896x896), historia = vertical 9:16 (768x1344). Ambas son
+    // medidas que Leonardo acepta siempre.
+    const W = formato === "historia" ? 768 : 896;
+    const H = formato === "historia" ? 1344 : 896;
+    const genId = await pedirFondo(p + REGLA_FONDO, W, H);
+    const url = await esperarResultado(genId);
+    return res.status(200).json({ url });
+  } catch (e) {
+    console.error("Error generando fondo:", e.message);
+    return res.status(500).json({ error: "No se pudo generar la imagen" });
+  }
+});
 
 // =====================================================================
 //  EDITOR DE VIDEO 360 (flow motion PRO): lento -> boomerang -> lento
