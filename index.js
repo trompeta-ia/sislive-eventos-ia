@@ -670,6 +670,24 @@ async function transcribir(buf) {
   return (((d.results || {}).channels || [])[0] || { alternatives: [{}] }).alternatives[0].transcript || "";
 }
 
+// Gemini: prueba el modelo configurado y, si Google ya no lo tiene, busca solo el "flash" más nuevo
+let GEM_ACTUAL = GEM_MODEL;
+async function pedirGemini(pedido) {
+  const H = { "content-type": "application/json", "x-goog-api-key": GEM_KEY };
+  const llamar = m => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", { method: "POST", headers: H,
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: pedido }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }) });
+  let r = await llamar(GEM_ACTUAL);
+  if (r.status === 404 || r.status === 400) {
+    const L = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", { headers: H }).then(x => x.json()).catch(() => ({}));
+    const ok = (L.models || []).filter(m => (m.supportedGenerationMethods || []).includes("generateContent") && /flash/i.test(m.name) && !/lite|image|tts|live|audio|thinking|exp|preview/i.test(m.name))
+      .map(m => m.name.replace(/^models\//, "")).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    if (ok.length && ok[0] !== GEM_ACTUAL) { GEM_ACTUAL = ok[0]; logRadio("Gemini: uso " + GEM_ACTUAL); r = await llamar(GEM_ACTUAL); }
+  }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error("Gemini " + r.status + " " + JSON.stringify(d).slice(0, 160));
+  return ((((d.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.text || "").join("");
+}
+
 // Texto → momentos (IA)
 async function grillaDeHoy(fecha) {
   const out = [];
@@ -708,11 +726,7 @@ async function momentosIA(texto, ctx) {
     if (!r.ok) throw new Error("OpenAI " + r.status + " " + JSON.stringify(d).slice(0, 160));
     salida = (((d.choices || [])[0] || {}).message || {}).content || "";
   } else if (GEM_KEY) {
-    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + GEM_MODEL + ":generateContent?key=" + encodeURIComponent(GEM_KEY), { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: pedido }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error("Gemini " + r.status + " " + JSON.stringify(d).slice(0, 160));
-    salida = ((((d.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.text || "").join("");
+    salida = await pedirGemini(pedido);
   } else throw new Error("Falta la clave de IA en Render (GEMINI_API_KEY, ANTHROPIC_API_KEY u OPENAI_API_KEY)");
   const m = salida.match(/\{[\s\S]*\}/);
   try { return JSON.parse(m ? m[0] : salida); } catch (e) { return { conjunto_actual: "", momentos: [] }; }
