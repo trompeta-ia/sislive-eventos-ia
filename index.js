@@ -611,7 +611,7 @@ app.post("/procesar360", limitarIP, chequearToken, async (req, res) => {
 // configurado, pasa el audio a texto cada 5 minutos (Deepgram) y una IA marca
 // los momentos de la noche. Todo se guarda en Firebase para el admin de Momóvil.
 // Variables en Render: DEEPGRAM_API_KEY, FIREBASE_DB_SECRET y una de:
-// ANTHROPIC_API_KEY (Claude) u OPENAI_API_KEY.
+// ANTHROPIC_API_KEY (Claude), OPENAI_API_KEY o GEMINI_API_KEY (Google, gratis).
 // =====================================================================
 const { spawn } = require("child_process");
 const FB_URL = (process.env.FIREBASE_DB_URL || "https://carnaval-2026-7cd07-default-rtdb.firebaseio.com").replace(/\/$/, "");
@@ -621,6 +621,8 @@ const ANT_KEY = process.env.ANTHROPIC_API_KEY || "";
 const ANT_MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-5-5";
 const OAI_KEY = process.env.OPENAI_API_KEY || "";
 const OAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const GEM_KEY = process.env.GEMINI_API_KEY || "";
+const GEM_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const SEG_SEG = Number(process.env.RADIO_SEGMENTO_SEG || 300);
 
 const RADIO = { proc: null, dir: null, url: "", inicio: 0, hechos: new Set(), procesando: false, errores: [], ultimo: null, cfg: null, fecha: "" };
@@ -705,7 +707,13 @@ async function momentosIA(texto, ctx) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error("OpenAI " + r.status + " " + JSON.stringify(d).slice(0, 160));
     salida = (((d.choices || [])[0] || {}).message || {}).content || "";
-  } else throw new Error("Falta ANTHROPIC_API_KEY u OPENAI_API_KEY en Render");
+  } else if (GEM_KEY) {
+    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + GEM_MODEL + ":generateContent?key=" + encodeURIComponent(GEM_KEY), { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: pedido }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error("Gemini " + r.status + " " + JSON.stringify(d).slice(0, 160));
+    salida = ((((d.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.text || "").join("");
+  } else throw new Error("Falta la clave de IA en Render (GEMINI_API_KEY, ANTHROPIC_API_KEY u OPENAI_API_KEY)");
   const m = salida.match(/\{[\s\S]*\}/);
   try { return JSON.parse(m ? m[0] : salida); } catch (e) { return { conjunto_actual: "", momentos: [] }; }
 }
@@ -784,7 +792,7 @@ setInterval(cicloRadio, 60 * 1000);
 setTimeout(cicloRadio, 5000);
 
 app.get("/radio/ping", (req, res) => res.json({ ok: true, grabando: !!RADIO.proc, version: VERSION }));
-app.get("/radio/estado", (req, res) => res.json({ grabando: !!RADIO.proc, url: RADIO.url, desde: RADIO.inicio, ultimo: RADIO.ultimo, log: RADIO.errores, claves: { deepgram: !!DG_KEY, ia: ANT_KEY ? "claude" : OAI_KEY ? "openai" : "", firebase: !!FB_SECRET } }));
+app.get("/radio/estado", (req, res) => res.json({ grabando: !!RADIO.proc, url: RADIO.url, desde: RADIO.inicio, ultimo: RADIO.ultimo, log: RADIO.errores, claves: { deepgram: !!DG_KEY, ia: ANT_KEY ? "claude" : OAI_KEY ? "openai" : GEM_KEY ? "gemini" : "", firebase: !!FB_SECRET } }));
 // Prueba: graba unos segundos de la radio y devuelve el texto y los momentos (no guarda nada)
 app.post("/radio/probar", limitarIP, chequearToken, async (req, res) => {
   const url = String((req.body && req.body.url) || "").trim();
