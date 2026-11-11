@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v11 · 360 pro + portada de revista + radio Momóvil";
+const VERSION = "ia-v12 · radio Momóvil + YouTube";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -747,13 +747,43 @@ async function procesarAudio(buf, horaTxt, fecha, guardar) {
   return { texto, conjunto: r.conjunto_actual || "", momentos };
 }
 
+// Links de YouTube (u otras páginas de video): yt-dlp saca el link directo del audio
+const YTDLP = path.join(os.tmpdir(), "yt-dlp");
+async function asegurarYtdlp() {
+  if (fs.existsSync(YTDLP)) return;
+  const r = await fetch("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux");
+  if (!r.ok) throw new Error("No pude bajar yt-dlp (" + r.status + ")");
+  fs.writeFileSync(YTDLP, Buffer.from(await r.arrayBuffer()));
+  fs.chmodSync(YTDLP, 0o755);
+  logRadio("yt-dlp instalado");
+}
+function esPaginaDeVideo(url) { return /youtube\.com|youtu\.be|twitch\.tv|facebook\.com|fb\.watch|vimeo\.com/i.test(url); }
+async function resolverUrl(url) {
+  if (!esPaginaDeVideo(url)) return url;
+  await asegurarYtdlp();
+  return await new Promise((ok, mal) => {
+    const p = spawn(YTDLP, ["-f", "bestaudio/best", "-g", "--no-warnings", "--no-playlist", url]);
+    let out = "", err = "";
+    p.stdout.on("data", d => out += d); p.stderr.on("data", d => err += d);
+    const to = setTimeout(() => { try { p.kill("SIGKILL"); } catch (e) {} }, 60000);
+    p.on("exit", c => { clearTimeout(to); const u = out.trim().split("\n")[0];
+      if (c === 0 && /^https?:/.test(u)) ok(u);
+      else mal(new Error(/sign in|bot/i.test(err) ? "YouTube bloqueó al robot (pide iniciar sesión). Conviene usar el link de la radio directo." : /not.*live|offline|will begin|Premieres/i.test(err) ? "Ese video de YouTube no está en vivo ahora." : "No pude sacar el audio de ese link: " + err.trim().slice(-200))); });
+  });
+}
+
 // Grabación continua con ffmpeg, cortada en pedazos de 5 minutos
 function argsEntrada(url) { return /^https?:/i.test(url) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "30", "-i", url] : ["-i", url]; }
-function iniciarRadio(cfg) {
+async function iniciarRadio(cfg) {
+  if (RADIO.proc || RADIO.arrancando) return;
+  RADIO.arrancando = true;
+  let entrada;
+  try { entrada = await resolverUrl(cfg.url); } catch (e) { logRadio("✖ " + e.message); RADIO.arrancando = false; return; }
+  RADIO.arrancando = false;
   if (RADIO.proc) return;
   RADIO.dir = fs.mkdtempSync(path.join(os.tmpdir(), "radio-"));
   RADIO.url = cfg.url; RADIO.inicio = Date.now(); RADIO.hechos = new Set(); RADIO.fecha = fechaNoche();
-  const args = ["-hide_banner", "-loglevel", "error", ...argsEntrada(cfg.url), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k",
+  const args = ["-hide_banner", "-loglevel", "error", ...argsEntrada(entrada), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k",
     "-f", "segment", "-segment_time", String(SEG_SEG), "-reset_timestamps", "1", path.join(RADIO.dir, "seg%04d.mp3")];
   const p = spawn(FFMPEG, args);
   RADIO.proc = p;
@@ -793,7 +823,7 @@ async function cicloRadio() {
   try {
     RADIO.cfg = (await fbGet("config_radio")) || null;
     const debe = dentroDeHorario(RADIO.cfg);
-    if (debe && !RADIO.proc) iniciarRadio(RADIO.cfg);
+    if (debe && !RADIO.proc) await iniciarRadio(RADIO.cfg);
     if (debe && RADIO.proc && RADIO.cfg.url !== RADIO.url) frenarRadio();     // cambiaron la radio
     if (!debe && RADIO.proc) frenarRadio();
     if (RADIO.proc) revisarSegmentos(false);
@@ -814,8 +844,9 @@ app.post("/radio/probar", limitarIP, chequearToken, async (req, res) => {
   if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: "Falta el link de la radio" });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rprueba-")), out = path.join(dir, "p.mp3");
   try {
+    const entrada = await resolverUrl(url);
     await new Promise((ok, mal) => {
-      const p = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", ...argsEntrada(url), "-t", String(seg), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", out]);
+      const p = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", ...argsEntrada(entrada), "-t", String(seg), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", out]);
       let err = ""; p.stderr.on("data", d => err += d);
       const to = setTimeout(() => { try { p.kill("SIGKILL"); } catch (e) {} }, (seg + 40) * 1000);
       p.on("exit", c => { clearTimeout(to); (fs.existsSync(out) && fs.statSync(out).size > 5000) ? ok() : mal(new Error("No se pudo escuchar la radio. ¿El link es el de la transmisión? " + err.slice(0, 200))); });
