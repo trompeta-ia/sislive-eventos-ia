@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v12 · radio Momóvil + YouTube";
+const VERSION = "ia-v13 · radio Momóvil (pipe)";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -774,6 +774,28 @@ async function resolverUrl(url) {
 
 // Grabación continua con ffmpeg, cortada en pedazos de 5 minutos
 function argsEntrada(url) { return /^https?:/i.test(url) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "30", "-i", url] : ["-i", url]; }
+// El ffmpeg estático se cae (segfault) al buscar nombres de servidores, así que Node baja la radio
+// y se la pasa a ffmpeg por dentro (pipe). Las listas .m3u8 sí las abre ffmpeg directo.
+const { Readable } = require("stream");
+function lanzarFfmpeg(entrada, salidaArgs) {
+  const porPipe = /^https?:/i.test(entrada) && !/\.m3u8(\?|$)/i.test(entrada);
+  const args = ["-hide_banner", "-loglevel", "error", ...(porPipe ? ["-i", "pipe:0"] : argsEntrada(entrada)), ...salidaArgs];
+  const p = spawn(FFMPEG, args);
+  if (!porPipe) return p;
+  const ctrl = new AbortController();
+  p.stdin.on("error", () => {});
+  p.on("exit", () => { try { ctrl.abort(); } catch (e) {} });
+  fetch(entrada, { signal: ctrl.signal, headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36", "Icy-MetaData": "0" } })
+    .then(r => {
+      if (!r.ok || !r.body) throw new Error("la radio respondió " + r.status);
+      const rs = Readable.fromWeb(r.body);
+      rs.on("error", () => { try { p.stdin.end(); } catch (e) {} });
+      rs.on("end", () => { try { p.stdin.end(); } catch (e) {} });
+      rs.pipe(p.stdin);
+    })
+    .catch(e => { if (e.name !== "AbortError") { p._errRed = e.message; logRadio("✖ conexión: " + e.message); } try { p.stdin.end(); } catch (x) {} });
+  return p;
+}
 async function iniciarRadio(cfg) {
   if (RADIO.proc || RADIO.arrancando) return;
   RADIO.arrancando = true;
@@ -783,9 +805,8 @@ async function iniciarRadio(cfg) {
   if (RADIO.proc) return;
   RADIO.dir = fs.mkdtempSync(path.join(os.tmpdir(), "radio-"));
   RADIO.url = cfg.url; RADIO.inicio = Date.now(); RADIO.hechos = new Set(); RADIO.fecha = fechaNoche();
-  const args = ["-hide_banner", "-loglevel", "error", ...argsEntrada(entrada), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k",
-    "-f", "segment", "-segment_time", String(SEG_SEG), "-reset_timestamps", "1", path.join(RADIO.dir, "seg%04d.mp3")];
-  const p = spawn(FFMPEG, args);
+  const p = lanzarFfmpeg(entrada, ["-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k",
+    "-f", "segment", "-segment_time", String(SEG_SEG), "-reset_timestamps", "1", path.join(RADIO.dir, "seg%04d.mp3")]);
   RADIO.proc = p;
   p.stderr.on("data", d => logRadio("ffmpeg: " + String(d).trim().slice(0, 160)));
   p.on("exit", code => { logRadio("grabación terminada (" + code + ")"); RADIO.proc = null; revisarSegmentos(true); });
@@ -846,10 +867,10 @@ app.post("/radio/probar", limitarIP, chequearToken, async (req, res) => {
   try {
     const entrada = await resolverUrl(url);
     await new Promise((ok, mal) => {
-      const p = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", ...argsEntrada(entrada), "-t", String(seg), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", out]);
+      const p = lanzarFfmpeg(entrada, ["-t", String(seg), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", out]);
       let err = ""; p.stderr.on("data", d => err += d);
       const to = setTimeout(() => { try { p.kill("SIGKILL"); } catch (e) {} }, (seg + 40) * 1000);
-      p.on("exit", c => { clearTimeout(to); (fs.existsSync(out) && fs.statSync(out).size > 5000) ? ok() : mal(new Error("No se pudo escuchar la radio. ¿El link es el de la transmisión? " + err.slice(0, 200))); });
+      p.on("exit", c => { clearTimeout(to); (fs.existsSync(out) && fs.statSync(out).size > 5000) ? ok() : mal(new Error("No se pudo escuchar la radio desde el robot. " + (p._errRed ? "(" + p._errRed + ") " : "") + (c === null ? "(ffmpeg se cerró) " : "") + err.slice(0, 200))); });
     });
     const h = horaUY();
     const r = await procesarAudio(fs.readFileSync(out), String(h.hh).padStart(2, "0") + ":" + String(h.mm).padStart(2, "0"), fechaNoche(), false);
