@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v10 · 360 pro + portada de revista";
+const VERSION = "ia-v11 · 360 pro + portada de revista + radio Momóvil";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -603,6 +603,206 @@ app.post("/procesar360", limitarIP, chequearToken, async (req, res) => {
   } finally {
     try { fs.rmSync(trabajo, { recursive: true, force: true }); } catch (e) {}
   }
+});
+
+
+// =====================================================================
+// 📻 RADIO DE CARNAVAL (Momóvil): escucha una radio por internet en el horario
+// configurado, pasa el audio a texto cada 5 minutos (Deepgram) y una IA marca
+// los momentos de la noche. Todo se guarda en Firebase para el admin de Momóvil.
+// Variables en Render: DEEPGRAM_API_KEY, FIREBASE_DB_SECRET y una de:
+// ANTHROPIC_API_KEY (Claude) u OPENAI_API_KEY.
+// =====================================================================
+const { spawn } = require("child_process");
+const FB_URL = (process.env.FIREBASE_DB_URL || "https://carnaval-2026-7cd07-default-rtdb.firebaseio.com").replace(/\/$/, "");
+const FB_SECRET = process.env.FIREBASE_DB_SECRET || "";
+const DG_KEY = process.env.DEEPGRAM_API_KEY || "";
+const ANT_KEY = process.env.ANTHROPIC_API_KEY || "";
+const ANT_MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-5-5";
+const OAI_KEY = process.env.OPENAI_API_KEY || "";
+const OAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const SEG_SEG = Number(process.env.RADIO_SEGMENTO_SEG || 300);
+
+const RADIO = { proc: null, dir: null, url: "", inicio: 0, hechos: new Set(), procesando: false, errores: [], ultimo: null, cfg: null, fecha: "" };
+function logRadio(m) { console.log("[radio] " + m); RADIO.errores.unshift(new Date().toISOString().slice(11, 19) + " " + m); RADIO.errores = RADIO.errores.slice(0, 15); }
+
+// Hora de Uruguay
+function horaUY(d) {
+  const p = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Montevideo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(d || new Date());
+  const g = t => p.find(x => x.type === t).value;
+  return { fecha: g("year") + "-" + g("month") + "-" + g("day"), hh: Number(g("hour")) % 24, mm: Number(g("minute")) };
+}
+// La "noche" de carnaval: después de medianoche sigue siendo la noche anterior
+function fechaNoche(d) {
+  const h = horaUY(d);
+  if (h.hh < 6) { const ay = new Date((d || new Date()).getTime() - 6 * 3600 * 1000); return horaUY(ay).fecha; }
+  return h.fecha;
+}
+function minutos(hhmm) { const [a, b] = String(hhmm || "0:0").split(":").map(Number); return (a || 0) * 60 + (b || 0); }
+function dentroDeHorario(cfg) {
+  if (!cfg || !cfg.activo || !cfg.url) return false;
+  const h = horaUY(), ahora = h.hh * 60 + h.mm, ini = minutos(cfg.desde || "19:50"), fin = minutos(cfg.hasta || "01:00");
+  return ini <= fin ? (ahora >= ini && ahora < fin) : (ahora >= ini || ahora < fin);
+}
+
+// Firebase por REST (la lectura es pública; la escritura usa el secreto de la base)
+async function fbGet(ruta) { const r = await fetch(FB_URL + "/" + ruta + ".json"); return r.ok ? r.json() : null; }
+async function fbPost(ruta, val) {
+  if (!FB_SECRET) throw new Error("Falta FIREBASE_DB_SECRET en Render");
+  const r = await fetch(FB_URL + "/" + ruta + ".json?auth=" + encodeURIComponent(FB_SECRET), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(val) });
+  if (!r.ok) throw new Error("Firebase " + r.status + " " + (await r.text()).slice(0, 120));
+}
+async function fbPut(ruta, val) {
+  if (!FB_SECRET) return;
+  await fetch(FB_URL + "/" + ruta + ".json?auth=" + encodeURIComponent(FB_SECRET), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(val) }).catch(() => {});
+}
+
+// Audio → texto
+async function transcribir(buf) {
+  if (!DG_KEY) throw new Error("Falta DEEPGRAM_API_KEY en Render");
+  const r = await fetch("https://api.deepgram.com/v1/listen?model=nova-2&language=es&smart_format=true&punctuate=true", {
+    method: "POST", headers: { Authorization: "Token " + DG_KEY, "Content-Type": "audio/mpeg" }, body: buf
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error("Deepgram " + r.status + " " + JSON.stringify(d).slice(0, 160));
+  return (((d.results || {}).channels || [])[0] || { alternatives: [{}] }).alternatives[0].transcript || "";
+}
+
+// Texto → momentos (IA)
+async function grillaDeHoy(fecha) {
+  const out = [];
+  try {
+    const conj = (await fbGet("conjuntos")) || {};
+    const nombre = id => (conj[id] && conj[id].nombre) || "";
+    for (const ruta of ["admision_etapas", "teatro_rueda1", "teatro_rueda2", "teatro_liguilla"]) {
+      const N = (await fbGet(ruta)) || {};
+      Object.values(N).forEach(n => { if (n && n.fecha === fecha) (n.actuaciones || []).forEach(a => out.push((a.hora || "") + " " + (nombre(a.conjuntoId) || a.nombre || ""))); });
+    }
+  } catch (e) {}
+  return out.sort();
+}
+async function momentosIA(texto, ctx) {
+  const pedido =
+    "Sos el editor de Momóvil, una app del Carnaval uruguayo. Te paso la transcripción automática (puede tener errores) de unos minutos de una radio que transmite el carnaval en vivo.\n" +
+    "Hora de este tramo (Uruguay): " + ctx.hora + ".\n" +
+    (ctx.grilla.length ? "Grilla de la noche (hora y conjunto):\n" + ctx.grilla.join("\n") + "\n" : "") +
+    "\nTRANSCRIPCIÓN:\n\"\"\"\n" + texto.slice(0, 14000) + "\n\"\"\"\n\n" +
+    "Marcá los MOMENTOS que sirvan para contenido de redes: algo gracioso que dijeron o pasó, lo que destacaron los comentaristas, una emoción fuerte, una reacción del público, un dato o anécdota de un conjunto. " +
+    "Ignorá publicidad, la música/letras cantadas y lo que no tenga interés. No inventes nada que no esté en el texto. Si no hay nada interesante, devolvé una lista vacía.\n" +
+    "Respondé SOLO con JSON válido, sin texto extra, con esta forma:\n" +
+    "{\"conjunto_actual\":\"nombre o vacío\",\"momentos\":[{\"tipo\":\"gracioso|destacado|emocion|publico|dato|comentario\",\"conjunto\":\"nombre o vacío\",\"titulo\":\"máx 8 palabras, con gancho\",\"resumen\":\"1 o 2 líneas, con palabras propias (no copies frases enteras)\",\"cita\":\"opcional, frase corta textual de máx 12 palabras\",\"puntaje\":1}]}\n" +
+    "puntaje: 1 a 5 según lo bueno que es para redes. Máximo 5 momentos.";
+  let salida = "";
+  if (ANT_KEY) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": ANT_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: ANT_MODEL, max_tokens: 1500, messages: [{ role: "user", content: pedido }] }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error("Claude " + r.status + " " + JSON.stringify(d).slice(0, 160));
+    salida = ((d.content || [])[0] || {}).text || "";
+  } else if (OAI_KEY) {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + OAI_KEY, "content-type": "application/json" },
+      body: JSON.stringify({ model: OAI_MODEL, response_format: { type: "json_object" }, messages: [{ role: "user", content: pedido }] }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error("OpenAI " + r.status + " " + JSON.stringify(d).slice(0, 160));
+    salida = (((d.choices || [])[0] || {}).message || {}).content || "";
+  } else throw new Error("Falta ANTHROPIC_API_KEY u OPENAI_API_KEY en Render");
+  const m = salida.match(/\{[\s\S]*\}/);
+  try { return JSON.parse(m ? m[0] : salida); } catch (e) { return { conjunto_actual: "", momentos: [] }; }
+}
+
+// Procesa un pedazo de audio: transcribe, busca momentos y guarda
+async function procesarAudio(buf, horaTxt, fecha, guardar) {
+  const texto = (await transcribir(buf)).trim();
+  if (!texto || texto.length < 40) return { texto, momentos: [] };
+  const ctx = { hora: horaTxt, grilla: await grillaDeHoy(fecha) };
+  const r = await momentosIA(texto, ctx);
+  const momentos = (r.momentos || []).filter(x => x && (x.resumen || x.titulo)).slice(0, 5);
+  if (guardar) {
+    const ts = Date.now();
+    await fbPost("radio_transcripciones/" + fecha, { ts, hora: horaTxt, conjunto: r.conjunto_actual || "", texto: texto.slice(0, 20000) });
+    for (const mo of momentos) await fbPost("radio_momentos/" + fecha, Object.assign({ ts, hora: horaTxt, radio: (RADIO.cfg && RADIO.cfg.nombre) || "" }, mo));
+  }
+  return { texto, conjunto: r.conjunto_actual || "", momentos };
+}
+
+// Grabación continua con ffmpeg, cortada en pedazos de 5 minutos
+function argsEntrada(url) { return /^https?:/i.test(url) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "30", "-i", url] : ["-i", url]; }
+function iniciarRadio(cfg) {
+  if (RADIO.proc) return;
+  RADIO.dir = fs.mkdtempSync(path.join(os.tmpdir(), "radio-"));
+  RADIO.url = cfg.url; RADIO.inicio = Date.now(); RADIO.hechos = new Set(); RADIO.fecha = fechaNoche();
+  const args = ["-hide_banner", "-loglevel", "error", ...argsEntrada(cfg.url), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k",
+    "-f", "segment", "-segment_time", String(SEG_SEG), "-reset_timestamps", "1", path.join(RADIO.dir, "seg%04d.mp3")];
+  const p = spawn(FFMPEG, args);
+  RADIO.proc = p;
+  p.stderr.on("data", d => logRadio("ffmpeg: " + String(d).trim().slice(0, 160)));
+  p.on("exit", code => { logRadio("grabación terminada (" + code + ")"); RADIO.proc = null; revisarSegmentos(true); });
+  logRadio("▶ grabando " + cfg.url);
+}
+function frenarRadio() { if (RADIO.proc) { try { RADIO.proc.kill("SIGINT"); } catch (e) {} } }
+async function revisarSegmentos(todos) {
+  if (RADIO.procesando || !RADIO.dir || !fs.existsSync(RADIO.dir)) return;
+  RADIO.procesando = true;
+  try {
+    const L = fs.readdirSync(RADIO.dir).filter(f => f.endsWith(".mp3")).sort();
+    const listos = todos ? L : L.slice(0, -1);           // el último se está grabando
+    for (const f of listos) {
+      if (RADIO.hechos.has(f)) continue;
+      RADIO.hechos.add(f);
+      const fp = path.join(RADIO.dir, f);
+      try {
+        const n = Number(f.match(/\d+/)[0]);
+        const t = new Date(RADIO.inicio + n * SEG_SEG * 1000), h = horaUY(t), h2 = horaUY(new Date(t.getTime() + SEG_SEG * 1000));
+        const horaTxt = String(h.hh).padStart(2, "0") + ":" + String(h.mm).padStart(2, "0") + "–" + String(h2.hh).padStart(2, "0") + ":" + String(h2.mm).padStart(2, "0");
+        const buf = fs.readFileSync(fp);
+        if (buf.length > 20000) {
+          const r = await procesarAudio(buf, horaTxt, RADIO.fecha, true);
+          RADIO.ultimo = { hora: horaTxt, momentos: r.momentos.length, conjunto: r.conjunto || "" };
+          logRadio("✔ " + horaTxt + " · " + r.momentos.length + " momentos");
+        }
+      } catch (e) { logRadio("✖ " + f + ": " + e.message); }
+      try { fs.unlinkSync(fp); } catch (e) {}
+    }
+    if (todos && !RADIO.proc) { try { fs.rmSync(RADIO.dir, { recursive: true, force: true }); } catch (e) {} RADIO.dir = null; }
+  } finally { RADIO.procesando = false; }
+}
+// Cada minuto: mira la configuración del admin y prende/apaga solo
+async function cicloRadio() {
+  try {
+    RADIO.cfg = (await fbGet("config_radio")) || null;
+    const debe = dentroDeHorario(RADIO.cfg);
+    if (debe && !RADIO.proc) iniciarRadio(RADIO.cfg);
+    if (debe && RADIO.proc && RADIO.cfg.url !== RADIO.url) frenarRadio();     // cambiaron la radio
+    if (!debe && RADIO.proc) frenarRadio();
+    if (RADIO.proc) revisarSegmentos(false);
+    // se mantiene despierto mientras graba (Render free se duerme sin visitas)
+    if (RADIO.proc && process.env.RENDER_EXTERNAL_URL) fetch(process.env.RENDER_EXTERNAL_URL + "/radio/ping").catch(() => {});
+    await fbPut("radio_estado", { grabando: !!RADIO.proc, url: RADIO.proc ? RADIO.url : "", desde: RADIO.proc ? RADIO.inicio : 0, ultimo: RADIO.ultimo, log: RADIO.errores.slice(0, 6), visto: Date.now(), version: VERSION });
+  } catch (e) { logRadio("ciclo: " + e.message); }
+}
+setInterval(cicloRadio, 60 * 1000);
+setTimeout(cicloRadio, 5000);
+
+app.get("/radio/ping", (req, res) => res.json({ ok: true, grabando: !!RADIO.proc, version: VERSION }));
+app.get("/radio/estado", (req, res) => res.json({ grabando: !!RADIO.proc, url: RADIO.url, desde: RADIO.inicio, ultimo: RADIO.ultimo, log: RADIO.errores, claves: { deepgram: !!DG_KEY, ia: ANT_KEY ? "claude" : OAI_KEY ? "openai" : "", firebase: !!FB_SECRET } }));
+// Prueba: graba unos segundos de la radio y devuelve el texto y los momentos (no guarda nada)
+app.post("/radio/probar", limitarIP, chequearToken, async (req, res) => {
+  const url = String((req.body && req.body.url) || "").trim();
+  const seg = Math.max(20, Math.min(120, Number((req.body && req.body.segundos) || 60)));
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: "Falta el link de la radio" });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rprueba-")), out = path.join(dir, "p.mp3");
+  try {
+    await new Promise((ok, mal) => {
+      const p = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", ...argsEntrada(url), "-t", String(seg), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", out]);
+      let err = ""; p.stderr.on("data", d => err += d);
+      const to = setTimeout(() => { try { p.kill("SIGKILL"); } catch (e) {} }, (seg + 40) * 1000);
+      p.on("exit", c => { clearTimeout(to); (fs.existsSync(out) && fs.statSync(out).size > 5000) ? ok() : mal(new Error("No se pudo escuchar la radio. ¿El link es el de la transmisión? " + err.slice(0, 200))); });
+    });
+    const h = horaUY();
+    const r = await procesarAudio(fs.readFileSync(out), String(h.hh).padStart(2, "0") + ":" + String(h.mm).padStart(2, "0"), fechaNoche(), false);
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {} }
 });
 
 const PORT = process.env.PORT || 3000;
