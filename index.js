@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v13 · radio Momóvil (pipe)";
+const VERSION = "ia-v14 · radio Momóvil";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -670,22 +670,33 @@ async function transcribir(buf) {
   return (((d.results || {}).channels || [])[0] || { alternatives: [{}] }).alternatives[0].transcript || "";
 }
 
-// Gemini: prueba el modelo configurado y, si Google ya no lo tiene, busca solo el "flash" más nuevo
-let GEM_ACTUAL = GEM_MODEL;
+// Gemini: prueba el modelo configurado y, si no anda (no existe o sin cupo gratis), va probando otros "flash"
+let GEM_ACTUAL = GEM_MODEL, GEM_LISTA = null;
 async function pedirGemini(pedido) {
   const H = { "content-type": "application/json", "x-goog-api-key": GEM_KEY };
   const llamar = m => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", { method: "POST", headers: H,
     body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: pedido }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }) });
-  let r = await llamar(GEM_ACTUAL);
-  if (r.status === 404 || r.status === 400) {
+  if (!GEM_LISTA) {
     const L = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", { headers: H }).then(x => x.json()).catch(() => ({}));
-    const ok = (L.models || []).filter(m => (m.supportedGenerationMethods || []).includes("generateContent") && /flash/i.test(m.name) && !/lite|image|tts|live|audio|thinking|exp|preview/i.test(m.name))
-      .map(m => m.name.replace(/^models\//, "")).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    if (ok.length && ok[0] !== GEM_ACTUAL) { GEM_ACTUAL = ok[0]; logRadio("Gemini: uso " + GEM_ACTUAL); r = await llamar(GEM_ACTUAL); }
+    const nombres = (L.models || []).filter(m => (m.supportedGenerationMethods || []).includes("generateContent") && /gemini.*flash/i.test(m.name) && !/image|tts|live|audio|native|thinking|exp/i.test(m.name))
+      .map(m => m.name.replace(/^models\//, ""));
+    const orden = n => (/lite/i.test(n) ? 1 : 0) + (/preview/i.test(n) ? 2 : 0);
+    nombres.sort((a, b) => orden(a) - orden(b) || b.localeCompare(a, undefined, { numeric: true }));
+    GEM_LISTA = nombres;
   }
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error("Gemini " + r.status + " " + JSON.stringify(d).slice(0, 160));
-  return ((((d.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.text || "").join("");
+  const probar = [GEM_ACTUAL, ...GEM_LISTA.filter(n => n !== GEM_ACTUAL)].slice(0, 12);
+  let ultimo = "";
+  for (const m of probar) {
+    const r = await llamar(m);
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      if (m !== GEM_ACTUAL) { GEM_ACTUAL = m; logRadio("Gemini: uso " + m); }
+      return ((((d.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.text || "").join("");
+    }
+    ultimo = "Gemini " + r.status + " (" + m + ") " + ((d.error && d.error.message) || "").slice(0, 140);
+    if (![400, 403, 404, 429].includes(r.status)) break;
+  }
+  throw new Error(ultimo || "Gemini no respondió");
 }
 
 // Texto → momentos (IA)
@@ -737,14 +748,15 @@ async function procesarAudio(buf, horaTxt, fecha, guardar) {
   const texto = (await transcribir(buf)).trim();
   if (!texto || texto.length < 40) return { texto, momentos: [] };
   const ctx = { hora: horaTxt, grilla: await grillaDeHoy(fecha) };
-  const r = await momentosIA(texto, ctx);
+  let r = { conjunto_actual: "", momentos: [] }, errorIA = "";
+  try { r = await momentosIA(texto, ctx); } catch (e) { errorIA = e.message; logRadio("✖ IA: " + e.message); }
   const momentos = (r.momentos || []).filter(x => x && (x.resumen || x.titulo)).slice(0, 5);
   if (guardar) {
     const ts = Date.now();
     await fbPost("radio_transcripciones/" + fecha, { ts, hora: horaTxt, conjunto: r.conjunto_actual || "", texto: texto.slice(0, 20000) });
     for (const mo of momentos) await fbPost("radio_momentos/" + fecha, Object.assign({ ts, hora: horaTxt, radio: (RADIO.cfg && RADIO.cfg.nombre) || "" }, mo));
   }
-  return { texto, conjunto: r.conjunto_actual || "", momentos };
+  return { texto, conjunto: r.conjunto_actual || "", momentos, errorIA };
 }
 
 // Links de YouTube (u otras páginas de video): yt-dlp saca el link directo del audio
