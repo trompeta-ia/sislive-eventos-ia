@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v14 · radio Momóvil";
+const VERSION = "ia-v17 · radio + resumen + reintentos";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -626,7 +626,8 @@ const GEM_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const SEG_SEG = Number(process.env.RADIO_SEGMENTO_SEG || 300);
 
 const RADIO = { proc: null, dir: null, url: "", inicio: 0, hechos: new Set(), procesando: false, errores: [], ultimo: null, cfg: null, fecha: "" };
-function logRadio(m) { console.log("[radio] " + m); RADIO.errores.unshift(new Date().toISOString().slice(11, 19) + " " + m); RADIO.errores = RADIO.errores.slice(0, 15); }
+function logRadio(m) { console.log("[radio] " + m); const h = horaUY(); RADIO.errores.unshift({ t: Date.now(), m: String(h.hh).padStart(2, "0") + ":" + String(h.mm).padStart(2, "0") + " " + m }); RADIO.errores = RADIO.errores.slice(0, 15); }
+function logTexto(minutos) { return RADIO.errores.filter(e => !minutos || Date.now() - e.t < minutos * 60000).map(e => e.m); }
 
 // Hora de Uruguay
 function horaUY(d) {
@@ -687,14 +688,16 @@ async function pedirGemini(pedido) {
   const probar = [GEM_ACTUAL, ...GEM_LISTA.filter(n => n !== GEM_ACTUAL)].slice(0, 12);
   let ultimo = "";
   for (const m of probar) {
-    const r = await llamar(m);
+    let r = await llamar(m);
+    // Google a veces está saturado (500/503): esperar un poco y reintentar el mismo modelo
+    for (let k = 0; k < 2 && (r.status === 503 || r.status === 500); k++) { await new Promise(ok => setTimeout(ok, 6000 * (k + 1))); r = await llamar(m); }
     const d = await r.json().catch(() => ({}));
     if (r.ok) {
       if (m !== GEM_ACTUAL) { GEM_ACTUAL = m; logRadio("Gemini: uso " + m); }
       return ((((d.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.text || "").join("");
     }
     ultimo = "Gemini " + r.status + " (" + m + ") " + ((d.error && d.error.message) || "").slice(0, 140);
-    if (![400, 403, 404, 429].includes(r.status)) break;
+    if (![400, 403, 404, 429, 500, 503].includes(r.status)) break;
   }
   throw new Error(ultimo || "Gemini no respondió");
 }
@@ -712,17 +715,7 @@ async function grillaDeHoy(fecha) {
   } catch (e) {}
   return out.sort();
 }
-async function momentosIA(texto, ctx) {
-  const pedido =
-    "Sos el editor de Momóvil, una app del Carnaval uruguayo. Te paso la transcripción automática (puede tener errores) de unos minutos de una radio que transmite el carnaval en vivo.\n" +
-    "Hora de este tramo (Uruguay): " + ctx.hora + ".\n" +
-    (ctx.grilla.length ? "Grilla de la noche (hora y conjunto):\n" + ctx.grilla.join("\n") + "\n" : "") +
-    "\nTRANSCRIPCIÓN:\n\"\"\"\n" + texto.slice(0, 14000) + "\n\"\"\"\n\n" +
-    "Marcá los MOMENTOS que sirvan para contenido de redes: algo gracioso que dijeron o pasó, lo que destacaron los comentaristas, una emoción fuerte, una reacción del público, un dato o anécdota de un conjunto. " +
-    "Ignorá publicidad, la música/letras cantadas y lo que no tenga interés. No inventes nada que no esté en el texto. Si no hay nada interesante, devolvé una lista vacía.\n" +
-    "Respondé SOLO con JSON válido, sin texto extra, con esta forma:\n" +
-    "{\"conjunto_actual\":\"nombre o vacío\",\"momentos\":[{\"tipo\":\"gracioso|destacado|emocion|publico|dato|comentario\",\"conjunto\":\"nombre o vacío\",\"titulo\":\"máx 8 palabras, con gancho\",\"resumen\":\"1 o 2 líneas, con palabras propias (no copies frases enteras)\",\"cita\":\"opcional, frase corta textual de máx 12 palabras\",\"puntaje\":1}]}\n" +
-    "puntaje: 1 a 5 según lo bueno que es para redes. Máximo 5 momentos.";
+async function llamarIA(pedido) {
   let salida = "";
   if (ANT_KEY) {
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": ANT_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -739,6 +732,23 @@ async function momentosIA(texto, ctx) {
   } else if (GEM_KEY) {
     salida = await pedirGemini(pedido);
   } else throw new Error("Falta la clave de IA en Render (GEMINI_API_KEY, ANTHROPIC_API_KEY u OPENAI_API_KEY)");
+  return salida;
+}
+
+async function momentosIA(texto, ctx) {
+  const pedido =
+    "Sos el editor de Momóvil, una app del Carnaval uruguayo. Te paso la transcripción automática (puede tener errores) de unos minutos de una radio que transmite el carnaval en vivo.\n" +
+    "Hora de este tramo (Uruguay): " + ctx.hora + ".\n" +
+    (ctx.grilla.length ? "Grilla de la noche (hora y conjunto):\n" + ctx.grilla.join("\n") + "\n" : "") +
+    "\nTRANSCRIPCIÓN:\n\"\"\"\n" + texto.slice(0, 14000) + "\n\"\"\"\n\n" +
+    "SOLO nos interesa el CARNAVAL (murgas, humoristas, parodistas, revistas, lubolos, comparsas, Teatro de Verano, Prueba de Admisión, tablados, desfiles, Llamadas, jurado, fallos, figuras y personajes del carnaval, lo que pasa en el escenario o detrás). " +
+    "Todo lo demás NO va: publicidad, sponsors, avisos, anuncios de la radio, noticias generales, deportes, política, el clima, saludos de oyentes que no tengan que ver con carnaval, música o letras cantadas sin comentario. Aunque sea gracioso, si no es de carnaval, no va.\n" +
+    "Marcá los MOMENTOS de CARNAVAL que sirvan para contenido de redes: algo gracioso que pasó o se dijo sobre un conjunto o el carnaval, lo que destacaron los comentaristas de una actuación, una emoción fuerte, la reacción del público, un dato, una anécdota, un anuncio (quién actúa, quién vuelve, un pase, un fallo). " +
+    "No inventes nada que no esté en el texto. Si en este tramo no se habló de carnaval, poné hay_carnaval en false y devolvé la lista vacía.\n" +
+    "Respondé SOLO con JSON válido, sin texto extra, con esta forma:\n" +
+    "{\"hay_carnaval\":true,\"conjunto_actual\":\"nombre o vacío\",\"momentos\":[{\"tipo\":\"gracioso|destacado|emocion|publico|dato|comentario\",\"conjunto\":\"nombre o vacío\",\"titulo\":\"máx 8 palabras, con gancho\",\"resumen\":\"1 o 2 líneas, con palabras propias (no copies frases enteras)\",\"cita\":\"opcional, frase corta textual de máx 12 palabras\",\"puntaje\":1}]}\n" +
+    "puntaje: 1 a 5 según lo bueno que es para redes. Máximo 5 momentos.";
+  const salida = await llamarIA(pedido);
   const m = salida.match(/\{[\s\S]*\}/);
   try { return JSON.parse(m ? m[0] : salida); } catch (e) { return { conjunto_actual: "", momentos: [] }; }
 }
@@ -753,10 +763,13 @@ async function procesarAudio(buf, horaTxt, fecha, guardar) {
   const momentos = (r.momentos || []).filter(x => x && (x.resumen || x.titulo)).slice(0, 5);
   if (guardar) {
     const ts = Date.now();
-    await fbPost("radio_transcripciones/" + fecha, { ts, hora: horaTxt, conjunto: r.conjunto_actual || "", texto: texto.slice(0, 20000) });
+    // la transcripción se guarda solo si hablaron de carnaval (o si la IA falló, para no perder nada)
+    if (errorIA || r.hay_carnaval !== false || momentos.length)
+      await fbPost("radio_transcripciones/" + fecha, { ts, hora: horaTxt, conjunto: r.conjunto_actual || "", texto: texto.slice(0, 20000) });
+    else logRadio("· " + horaTxt + " sin carnaval (no se guarda)");
     for (const mo of momentos) await fbPost("radio_momentos/" + fecha, Object.assign({ ts, hora: horaTxt, radio: (RADIO.cfg && RADIO.cfg.nombre) || "" }, mo));
   }
-  return { texto, conjunto: r.conjunto_actual || "", momentos, errorIA };
+  return { texto, conjunto: r.conjunto_actual || "", momentos, errorIA, hayCarnaval: r.hay_carnaval !== false };
 }
 
 // Links de YouTube (u otras páginas de video): yt-dlp saca el link directo del audio
@@ -821,7 +834,9 @@ async function iniciarRadio(cfg) {
     "-f", "segment", "-segment_time", String(SEG_SEG), "-reset_timestamps", "1", path.join(RADIO.dir, "seg%04d.mp3")]);
   RADIO.proc = p;
   p.stderr.on("data", d => logRadio("ffmpeg: " + String(d).trim().slice(0, 160)));
-  p.on("exit", code => { logRadio("grabación terminada (" + code + ")"); RADIO.proc = null; revisarSegmentos(true); });
+  const fechaGrab = RADIO.fecha;
+  p.on("exit", code => { logRadio("grabación terminada (" + code + ")"); RADIO.proc = null;
+    Promise.resolve(revisarSegmentos(true)).then(() => { if (!dentroDeHorario(RADIO.cfg)) return armarResumen(fechaGrab); }).catch(e => logRadio("✖ resumen: " + e.message)); });
   logRadio("▶ grabando " + cfg.url);
 }
 function frenarRadio() { if (RADIO.proc) { try { RADIO.proc.kill("SIGINT"); } catch (e) {} } }
@@ -862,15 +877,51 @@ async function cicloRadio() {
     if (RADIO.proc) revisarSegmentos(false);
     // se mantiene despierto mientras graba (Render free se duerme sin visitas)
     if (RADIO.proc && process.env.RENDER_EXTERNAL_URL) fetch(process.env.RENDER_EXTERNAL_URL + "/radio/ping").catch(() => {});
-    await fbPut("radio_estado", { grabando: !!RADIO.proc, url: RADIO.proc ? RADIO.url : "", desde: RADIO.proc ? RADIO.inicio : 0, ultimo: RADIO.ultimo, log: RADIO.errores.slice(0, 6), visto: Date.now(), version: VERSION });
+    await fbPut("radio_estado", { grabando: !!RADIO.proc, url: RADIO.proc ? RADIO.url : "", desde: RADIO.proc ? RADIO.inicio : 0, ultimo: RADIO.ultimo, log: logTexto(12).slice(0, 6), visto: Date.now(), version: VERSION });
   } catch (e) { logRadio("ciclo: " + e.message); }
 }
 setInterval(cicloRadio, 60 * 1000);
 setTimeout(cicloRadio, 5000);
 
 app.get("/radio/ping", (req, res) => res.json({ ok: true, grabando: !!RADIO.proc, version: VERSION }));
-app.get("/radio/estado", (req, res) => res.json({ grabando: !!RADIO.proc, url: RADIO.url, desde: RADIO.inicio, ultimo: RADIO.ultimo, log: RADIO.errores, claves: { deepgram: !!DG_KEY, ia: ANT_KEY ? "claude" : OAI_KEY ? "openai" : GEM_KEY ? "gemini" : "", firebase: !!FB_SECRET } }));
+app.get("/radio/estado", (req, res) => res.json({ grabando: !!RADIO.proc, url: RADIO.url, desde: RADIO.inicio, ultimo: RADIO.ultimo, log: logTexto(0), claves: { deepgram: !!DG_KEY, ia: ANT_KEY ? "claude" : OAI_KEY ? "openai" : GEM_KEY ? "gemini" : "", firebase: !!FB_SECRET } }));
 // Prueba: graba unos segundos de la radio y devuelve el texto y los momentos (no guarda nada)
+// ☀️ Resumen de la noche: con los momentos guardados, la IA elige qué publicar y escribe los textos
+async function armarResumen(fecha) {
+  const M = (await fbGet("radio_momentos/" + fecha)) || {};
+  const ids = Object.keys(M);
+  if (!ids.length) return { vacio: true };
+  const lista = ids.map(id => ({ id, ...M[id] })).sort((a, b) => (a.ts || 0) - (b.ts || 0))
+    .map(m => ({ id: m.id, hora: m.hora, tipo: m.tipo, conjunto: m.conjunto || "", titulo: m.titulo || "", resumen: m.resumen || "", cita: m.cita || "", puntaje: m.puntaje || 1 }));
+  const radio = (RADIO.cfg && RADIO.cfg.nombre) || "";
+  const pedido =
+    "Sos el community manager de Momóvil (app del Carnaval uruguayo). Estos son los momentos de CARNAVAL que se escucharon anoche en la radio" + (radio ? " " + radio : "") + " (JSON):\n" +
+    JSON.stringify(lista).slice(0, 15000) + "\n\n" +
+    "Elegí qué publicar mañana en Instagram y en la app. Usá SOLO lo que está en los momentos, no inventes nada. Escribí en español rioplatense (Uruguay), con voseo, con gancho y algún emoji.\n" +
+    "Devolvé SOLO JSON válido con esta forma:\n" +
+    "{\"frase\":{\"id\":\"id del momento\",\"cita\":\"la frase textual corta (máx 14 palabras), tal cual está en 'cita'\",\"quien\":\"conjunto o quién la dijo, o vacío\",\"caption\":\"texto para Instagram\"} o null si ninguna cita sirve,\n" +
+    " \"gracioso\":{\"id\":\"id\",\"caption\":\"texto para Instagram\"} o null si no hubo nada gracioso,\n" +
+    " \"carrusel\":{\"ids\":[\"3 a 6 ids, los mejores, en orden de la noche\"],\"titulo\":\"título corto para la portada\",\"caption\":\"texto para Instagram\"},\n" +
+    " \"conjuntos\":[{\"conjunto\":\"nombre\",\"ids\":[\"ids de ese conjunto\"],\"caption\":\"texto para Instagram mencionando al conjunto\"}] (máximo 3, solo conjuntos con 2 o más momentos)}\n" +
+    "Cada caption: 3 a 6 líneas, cerrá con '🎙️ Escuchado en " + (radio || "la radio") + "', después '#Carnaval2027 #CarnavalUruguayo' y al final '📲 momovil.app'.";
+  const salida = await llamarIA(pedido);
+  const m = salida.match(/\{[\s\S]*\}/);
+  let r; try { r = JSON.parse(m ? m[0] : salida); } catch (e) { throw new Error("La IA no devolvió un resumen válido"); }
+  const ok = id => M[id] ? id : null;
+  const out = { ts: Date.now(), fecha, radio };
+  if (r.frase && r.frase.cita) out.frase = { id: ok(r.frase.id) || "", cita: String(r.frase.cita).slice(0, 160), quien: r.frase.quien || "", caption: r.frase.caption || "" };
+  if (r.gracioso && ok(r.gracioso.id)) out.gracioso = { id: r.gracioso.id, caption: r.gracioso.caption || "" };
+  if (r.carrusel && Array.isArray(r.carrusel.ids)) { const v = r.carrusel.ids.filter(ok).slice(0, 8); if (v.length) out.carrusel = { ids: v, titulo: r.carrusel.titulo || "", caption: r.carrusel.caption || "" }; }
+  if (Array.isArray(r.conjuntos)) out.conjuntos = r.conjuntos.map(c => ({ conjunto: c.conjunto || "", ids: (c.ids || []).filter(ok), caption: c.caption || "" })).filter(c => c.conjunto && c.ids.length).slice(0, 3);
+  await fbPut("radio_resumen/" + fecha, out);
+  logRadio("☀️ resumen de la noche " + fecha + " listo");
+  return out;
+}
+app.post("/radio/resumen", limitarIP, chequearToken, async (req, res) => {
+  try { const f = String((req.body && req.body.fecha) || fechaNoche()); res.json(await armarResumen(f)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post("/radio/probar", limitarIP, chequearToken, async (req, res) => {
   const url = String((req.body && req.body.url) || "").trim();
   const seg = Math.max(20, Math.min(120, Number((req.body && req.body.segundos) || 60)));
