@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v17 · radio + resumen + reintentos";
+const VERSION = "ia-v18 · radio + convertir videos en contenido";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -673,10 +673,8 @@ async function transcribir(buf) {
 
 // Gemini: prueba el modelo configurado y, si no anda (no existe o sin cupo gratis), va probando otros "flash"
 let GEM_ACTUAL = GEM_MODEL, GEM_LISTA = null;
-async function pedirGemini(pedido) {
+async function cargarListaGemini() {
   const H = { "content-type": "application/json", "x-goog-api-key": GEM_KEY };
-  const llamar = m => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", { method: "POST", headers: H,
-    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: pedido }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }) });
   if (!GEM_LISTA) {
     const L = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", { headers: H }).then(x => x.json()).catch(() => ({}));
     const nombres = (L.models || []).filter(m => (m.supportedGenerationMethods || []).includes("generateContent") && /gemini.*flash/i.test(m.name) && !/image|tts|live|audio|native|thinking|exp/i.test(m.name))
@@ -685,6 +683,12 @@ async function pedirGemini(pedido) {
     nombres.sort((a, b) => orden(a) - orden(b) || b.localeCompare(a, undefined, { numeric: true }));
     GEM_LISTA = nombres;
   }
+}
+async function pedirGemini(pedido) {
+  const H = { "content-type": "application/json", "x-goog-api-key": GEM_KEY };
+  const llamar = m => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", { method: "POST", headers: H,
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: pedido }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }) });
+  await cargarListaGemini();
   const probar = [GEM_ACTUAL, ...GEM_LISTA.filter(n => n !== GEM_ACTUAL)].slice(0, 12);
   let ultimo = "";
   for (const m of probar) {
@@ -715,6 +719,80 @@ async function grillaDeHoy(fecha) {
   } catch (e) {}
   return out.sort();
 }
+// =====================================================================
+// 📥 CONVERTIR EN CONTENIDO: un video (o captura) que Andrés sube al admin.
+// Deepgram escucha el video por su link, Gemini mira algunos cuadros y arma
+// la noticia, la frase, las líneas de la placa y el texto de Instagram.
+// =====================================================================
+async function transcribirURL(url) {
+  if (!DG_KEY) throw new Error("Falta DEEPGRAM_API_KEY en Render");
+  const r = await fetch("https://api.deepgram.com/v1/listen?model=nova-2&language=es&smart_format=true&punctuate=true", {
+    method: "POST", headers: { Authorization: "Token " + DG_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ url })
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error("Deepgram " + r.status + " " + JSON.stringify(d).slice(0, 160));
+  return ((((d.results || {}).channels || [])[0] || { alternatives: [{}] }).alternatives[0].transcript || "").trim();
+}
+async function imagenBase64(url) {
+  const r = await fetch(url); if (!r.ok) throw new Error("imagen " + r.status);
+  const b = Buffer.from(await r.arrayBuffer());
+  return { mime: r.headers.get("content-type") || "image/jpeg", data: b.toString("base64") };
+}
+async function geminiConImagenes(pedido, imagenes) {
+  if (!GEM_KEY) return null;
+  const H = { "content-type": "application/json", "x-goog-api-key": GEM_KEY };
+  const parts = [{ text: pedido }].concat(imagenes.map(im => ({ inline_data: { mime_type: im.mime, data: im.data } })));
+  const modelos = [GEM_ACTUAL, ...((GEM_LISTA || []).filter(n => n !== GEM_ACTUAL))].slice(0, 6);
+  let ultimo = "";
+  for (const m of modelos) {
+    let r;
+    for (let k = 0; k < 3; k++) {
+      r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", { method: "POST", headers: H,
+        body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.5 } }) });
+      if (r.status !== 503 && r.status !== 500) break;
+      await new Promise(ok => setTimeout(ok, 5000 * (k + 1)));
+    }
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) { GEM_ACTUAL = m; return ((((d.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.text || "").join(""); }
+    ultimo = "Gemini " + r.status + " " + ((d.error && d.error.message) || "").slice(0, 140);
+    if (![400, 403, 404, 429, 500, 503].includes(r.status)) break;
+  }
+  throw new Error(ultimo || "Gemini no respondió");
+}
+app.post("/contenido/procesar", limitarIP, chequearToken, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const url = String(b.url || ""), tipo = b.tipo === "imagen" ? "imagen" : "video";
+    const fuente = String(b.fuente || "").slice(0, 60), nota = String(b.nota || "").slice(0, 400);
+    const cuadros = (Array.isArray(b.cuadros) ? b.cuadros : []).filter(u => /^https:\/\/res\.cloudinary\.com\//.test(u)).slice(0, 4);
+    if (!/^https:\/\/res\.cloudinary\.com\//.test(url)) return res.status(400).json({ error: "Falta el archivo" });
+    let texto = "";
+    if (tipo === "video") { try { texto = await transcribirURL(url); } catch (e) { texto = ""; logRadio("✖ contenido: " + e.message); } }
+    const imgs = [];
+    for (const u of (tipo === "imagen" ? [url] : cuadros)) { try { imgs.push(await imagenBase64(u)); } catch (e) {} }
+    if (!texto && !imgs.length) return res.status(422).json({ error: "No se pudo escuchar ni ver el archivo" });
+    if (GEM_KEY) { try { await cargarListaGemini(); } catch (e) {} }
+    const pedido =
+      "Sos el editor de Momóvil (momovil.app), la app del Carnaval uruguayo. Andrés subió " + (tipo === "video" ? "un video" : "una captura de pantalla") +
+      (fuente ? " publicado por " + fuente : "") + (nota ? ". Nota de Andrés: " + nota : "") + ".\n" +
+      (texto ? "Lo que se escucha en el video (transcripción automática, puede tener errores):\n\"\"\"\n" + texto.slice(0, 12000) + "\n\"\"\"\n" : "No hay audio útil: guiate por las imágenes.\n") +
+      (imgs.length ? "Te paso " + imgs.length + " imagen(es) " + (tipo === "video" ? "sacadas del video" : "") + ". Leé los textos que aparezcan en pantalla (nombres, placas, carteles, zócalos).\n" : "") +
+      "Armá contenido para Instagram y para la app. Reglas: español rioplatense (Uruguay) con voseo; NO inventes nada que no se vea o se escuche; si es una actuación (murga, parodistas, etc.) describí qué conjunto es si se sabe y qué pasa, pero NO transcribas letras de canciones (como mucho una frase de 10 palabras); redactá con palabras propias; el crédito siempre a la fuente.\n" +
+      "Respondé SOLO con JSON válido:\n" +
+      "{\"que_es\":\"actuación|entrevista|comentario|anuncio|otro\",\"conjunto\":\"nombre o vacío\",\"resumen\":\"2 o 3 líneas de qué pasa en el video\"," +
+      "\"noticia\":{\"titulo\":\"TÍTULO EN MAYÚSCULAS, corto y con gancho\",\"cuerpo\":\"3 a 6 líneas con palabras propias, algún emoji, cerrando con 'Seguí todo en Momóvil 📲'\"}," +
+      "\"frase\":{\"cita\":\"frase textual corta (máx 14 palabras) que valga la pena, o vacío\",\"quien\":\"quién la dijo o vacío\"}," +
+      "\"placa\":[\"línea 1 (título corto)\",\"línea 2 (dato clave)\",\"línea 3 opcional\"]," +
+      "\"caption\":\"texto para Instagram de 3 a 6 líneas, con 📣 Fuente: " + (fuente || "la cuenta original") + ", hashtags #Carnaval2027 #CarnavalUruguayo y al final 📲 momovil.app\"}";
+    let salida;
+    if (imgs.length && GEM_KEY) salida = await geminiConImagenes(pedido, imgs);
+    else salida = await llamarIA(pedido);
+    const m = (salida || "").match(/\{[\s\S]*\}/);
+    let r; try { r = JSON.parse(m ? m[0] : salida); } catch (e) { return res.status(500).json({ error: "La IA no devolvió un resultado válido", texto }); }
+    res.json({ ok: true, texto, ...r });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 async function llamarIA(pedido) {
   let salida = "";
   if (ANT_KEY) {
