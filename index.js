@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v18 · radio + convertir videos en contenido";
+const VERSION = "ia-v19 · contenido sin perder el audio";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -785,8 +785,15 @@ app.post("/contenido/procesar", limitarIP, chequearToken, async (req, res) => {
       "\"placa\":[\"línea 1 (título corto)\",\"línea 2 (dato clave)\",\"línea 3 opcional\"]," +
       "\"caption\":\"texto para Instagram de 3 a 6 líneas, con 📣 Fuente: " + (fuente || "la cuenta original") + ", hashtags #Carnaval2027 #CarnavalUruguayo y al final 📲 momovil.app\"}";
     let salida;
-    if (imgs.length && GEM_KEY) salida = await geminiConImagenes(pedido, imgs);
-    else salida = await llamarIA(pedido);
+    try {
+      if (imgs.length && GEM_KEY) salida = await geminiConImagenes(pedido, imgs);
+      else salida = await llamarIA(pedido);
+    } catch (e) {
+      // sin IA igual devolvemos lo que se escuchó y los cuadros, para no perder el trabajo
+      const cupo = /429|quota/i.test(e.message);
+      return res.json({ ok: true, texto, errorIA: cupo ? "Se terminó el cupo gratis de hoy de la IA de Google (Gemini). Vuelve a andar mañana, o activando la facturación en Google AI Studio." : e.message,
+        resumen: "", noticia: { titulo: "", cuerpo: texto ? texto.slice(0, 600) : "" }, frase: {}, placa: [], caption: "" });
+    }
     const m = (salida || "").match(/\{[\s\S]*\}/);
     let r; try { r = JSON.parse(m ? m[0] : salida); } catch (e) { return res.status(500).json({ error: "La IA no devolvió un resultado válido", texto }); }
     res.json({ ok: true, texto, ...r });
