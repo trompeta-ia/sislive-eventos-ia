@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v20 · contenido con voz propia";
+const VERSION = "ia-v21 · contenido + otra versión";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -759,6 +759,27 @@ async function geminiConImagenes(pedido, imagenes) {
   }
   throw new Error(ultimo || "Gemini no respondió");
 }
+// 🔀 Otra versión de un texto: dice lo mismo, con otras palabras y otro orden
+app.post("/contenido/reescribir", limitarIP, chequearToken, async (req, res) => {
+  try {
+    const texto = String((req.body && req.body.texto) || "").trim().slice(0, 4000);
+    const tipo = String((req.body && req.body.tipo) || "texto");
+    if (texto.length < 10) return res.status(400).json({ error: "No hay texto para cambiar" });
+    const pedido =
+      "Reescribí este texto de Momóvil (app del Carnaval uruguayo) para que diga EXACTAMENTE lo mismo pero sin parecerse al original.\n" +
+      "Reglas:\n- Cambiá el orden: arrancá por otra parte de la información y reorganizá las ideas.\n- Cambiá todas las palabras y frases (sinónimos, otra estructura), con otro arranque (pregunta, exclamación, dato o imagen).\n" +
+      "- Español rioplatense (Uruguay) con voseo, voz cercana y carnavalera, algún emoji.\n- Mantené todos los datos (nombres, fechas, lugares, horarios) sin agregar hechos nuevos ni sacar ninguno.\n" +
+      "- Lo que esté entre comillas (citas textuales), las menciones @, los hashtags, '📣 Fuente:' y 'momovil.app' dejalos tal cual.\n- Largo parecido al original." +
+      (tipo === "noticia" ? " Si la primera línea es un título, devolvé un título nuevo en MAYÚSCULAS en la primera línea." : "") +
+      "\nRespondé SOLO con JSON: {\"texto\":\"...\"}\n\nTEXTO:\n\"\"\"\n" + texto + "\n\"\"\"";
+    const salida = await llamarIA(pedido);
+    const m = (salida || "").match(/\{[\s\S]*\}/);
+    let r; try { r = JSON.parse(m ? m[0] : salida); } catch (e) { return res.status(500).json({ error: "La IA no devolvió un texto válido" }); }
+    if (!r.texto) return res.status(500).json({ error: "La IA no devolvió texto" });
+    res.json({ texto: String(r.texto) });
+  } catch (e) { res.status(500).json({ error: /429|quota/i.test(e.message) ? "Se terminó el cupo gratis de hoy de la IA (Gemini). Vuelve mañana o activando la facturación." : e.message }); }
+});
+
 app.post("/contenido/procesar", limitarIP, chequearToken, async (req, res) => {
   try {
     const b = req.body || {};
