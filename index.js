@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v19 · contenido sin perder el audio";
+const VERSION = "ia-v20 · contenido con voz propia";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -777,7 +777,13 @@ app.post("/contenido/procesar", limitarIP, chequearToken, async (req, res) => {
       (fuente ? " publicado por " + fuente : "") + (nota ? ". Nota de Andrés: " + nota : "") + ".\n" +
       (texto ? "Lo que se escucha en el video (transcripción automática, puede tener errores):\n\"\"\"\n" + texto.slice(0, 12000) + "\n\"\"\"\n" : "No hay audio útil: guiate por las imágenes.\n") +
       (imgs.length ? "Te paso " + imgs.length + " imagen(es) " + (tipo === "video" ? "sacadas del video" : "") + ". Leé los textos que aparezcan en pantalla (nombres, placas, carteles, zócalos).\n" : "") +
-      "Armá contenido para Instagram y para la app. Reglas: español rioplatense (Uruguay) con voseo; NO inventes nada que no se vea o se escuche; si es una actuación (murga, parodistas, etc.) describí qué conjunto es si se sabe y qué pasa, pero NO transcribas letras de canciones (como mucho una frase de 10 palabras); redactá con palabras propias; el crédito siempre a la fuente.\n" +
+      "Armá contenido para Instagram y para la app con la VOZ PROPIA de Momóvil: cercana, carnavalera, con entusiasmo y humor, como un hincha que sabe de carnaval contándole a sus amigos. Reglas:\n" +
+      "- Español rioplatense (Uruguay) con voseo.\n" +
+      "- Reescribí TODO con palabras y estructura propias: otro orden, otro arranque, otras frases. Nunca sigas el orden ni las frases del original; variá cómo empezás (una pregunta, una exclamación, un dato, una imagen).\n" +
+      "- Podés sumar color y opinión de Momóvil, dejando claro que es opinión (\"¡qué manera de arrancar!\", \"de las que hay que ver\", \"se viene una temporada picante\"), y contexto general del carnaval que sea de conocimiento común.\n" +
+      "- Lo que NO podés: inventar HECHOS (quién dijo qué, cifras, premios, reacciones del público, fechas, nombres) que no se vean o se escuchen. Si no está, no lo afirmes.\n" +
+      "- Si es una actuación (murga, parodistas, etc.) describí qué conjunto es si se sabe y qué pasa, pero NO transcribas letras de canciones (como mucho una frase de 10 palabras).\n" +
+      "- La frase textual (cita) es lo único que va tal cual; el crédito siempre a la fuente.\n" +
       "Respondé SOLO con JSON válido:\n" +
       "{\"que_es\":\"actuación|entrevista|comentario|anuncio|otro\",\"conjunto\":\"nombre o vacío\",\"resumen\":\"2 o 3 líneas de qué pasa en el video\"," +
       "\"noticia\":{\"titulo\":\"TÍTULO EN MAYÚSCULAS, corto y con gancho\",\"cuerpo\":\"3 a 6 líneas con palabras propias, algún emoji, cerrando con 'Seguí todo en Momóvil 📲'\"}," +
