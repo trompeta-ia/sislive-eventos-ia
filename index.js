@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v21 · contenido + otra versión";
+const VERSION = "ia-v22 · puntajes del jurado";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -738,7 +738,7 @@ async function imagenBase64(url) {
   const b = Buffer.from(await r.arrayBuffer());
   return { mime: r.headers.get("content-type") || "image/jpeg", data: b.toString("base64") };
 }
-async function geminiConImagenes(pedido, imagenes) {
+async function geminiConImagenes(pedido, imagenes, temp) {
   if (!GEM_KEY) return null;
   const H = { "content-type": "application/json", "x-goog-api-key": GEM_KEY };
   const parts = [{ text: pedido }].concat(imagenes.map(im => ({ inline_data: { mime_type: im.mime, data: im.data } })));
@@ -748,7 +748,7 @@ async function geminiConImagenes(pedido, imagenes) {
     let r;
     for (let k = 0; k < 3; k++) {
       r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", { method: "POST", headers: H,
-        body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.5 } }) });
+        body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: (typeof temp === "number" ? temp : 0.5) } }) });
       if (r.status !== 503 && r.status !== 500) break;
       await new Promise(ok => setTimeout(ok, 5000 * (k + 1)));
     }
@@ -778,6 +778,36 @@ app.post("/contenido/reescribir", limitarIP, chequearToken, async (req, res) => 
     if (!r.texto) return res.status(500).json({ error: "La IA no devolvió texto" });
     res.json({ texto: String(r.texto) });
   } catch (e) { res.status(500).json({ error: /429|quota/i.test(e.message) ? "Se terminó el cupo gratis de hoy de la IA (Gemini). Vuelve mañana o activando la facturación." : e.message }); }
+});
+
+// 📊 Lee una captura con la tabla de puntajes del jurado y la devuelve ordenada
+app.post("/contenido/puntajes", limitarIP, chequearToken, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const data = String(b.imagen || "").replace(/^data:[^,]+,/, "");
+    if (data.length < 1000) return res.status(400).json({ error: "Falta la captura" });
+    if (!GEM_KEY) return res.status(500).json({ error: "Falta la clave de Gemini en el servidor" });
+    try { await cargarListaGemini(); } catch (e) {}
+    const pedido =
+      "Esta imagen es una tabla con los puntajes que puso el jurado a conjuntos del Carnaval uruguayo (murgas, parodistas, humoristas, revistas, lubolos).\n" +
+      "Copiá los datos EXACTAMENTE como aparecen. No inventes ni corrijas nada. Si un número no se lee, poné null.\n" +
+      "- jurados: los nombres de los jurados en el orden de las columnas (como figuran, ej. 'Eduardo O.'). Si no hay nombres, lista vacía.\n" +
+      "- categorias: cada categoría con sus conjuntos; puntos = la nota de cada jurado en el mismo orden de las columnas. NO incluyas la columna de total ni promedios.\n" +
+      "- Si la tabla no separa categorías, usá una sola categoría con nombre 'General'.\n" +
+      "- etapa: si la imagen dice qué etapa o noche es (ej. 'Prueba de Admisión - Noche 2'), ponela; si no, vacío.\n" +
+      "Respondé SOLO JSON: {\"etapa\":\"\",\"jurados\":[\"...\"],\"categorias\":[{\"nombre\":\"Humoristas\",\"conjuntos\":[{\"nombre\":\"...\",\"puntos\":[10,8,11]}]}]}";
+    let salida;
+    try { salida = await geminiConImagenes(pedido, [{ mime: String(b.mime || "image/jpeg"), data }], 0); }
+    catch (e) { return res.status(500).json({ error: /429|quota/i.test(e.message) ? "Se terminó el cupo gratis de hoy de la IA (Gemini). Escribí los puntajes a mano o probá mañana" : e.message }); }
+    const m = (salida || "").match(/\{[\s\S]*\}/);
+    let r; try { r = JSON.parse(m ? m[0] : salida); } catch (e) { return res.status(500).json({ error: "La IA no pudo leer la tabla" }); }
+    const cats = (Array.isArray(r.categorias) ? r.categorias : []).map(c => ({
+      nombre: String(c.nombre || "General"),
+      conjuntos: (Array.isArray(c.conjuntos) ? c.conjuntos : []).map(x => ({ nombre: String(x.nombre || "").trim(), puntos: (Array.isArray(x.puntos) ? x.puntos : []).map(n => (typeof n === "number" ? n : parseFloat(String(n).replace(",", ".")))).map(n => (isFinite(n) ? n : 0)) })).filter(x => x.nombre)
+    })).filter(c => c.conjuntos.length);
+    if (!cats.length) return res.status(422).json({ error: "No encontré una tabla de puntajes en la imagen" });
+    res.json({ ok: true, etapa: String(r.etapa || ""), jurados: (Array.isArray(r.jurados) ? r.jurados : []).map(String), categorias: cats });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/contenido/procesar", limitarIP, chequearToken, async (req, res) => {
