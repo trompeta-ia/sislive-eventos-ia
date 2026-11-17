@@ -46,7 +46,7 @@ function chequearToken(req, res, next) {
 
 const LEONARDO = "https://cloud.leonardo.ai/api/rest";
 const KEY = process.env.LEONARDO_API_KEY;
-const VERSION = "ia-v22 · puntajes del jurado";
+const VERSION = "ia-v23 · puntajes + Gemini insistente";
 
 // Negative prompt (lo que NO queremos). Igual que la versión que funcionaba.
 const NEGATIVO = "deformed, distorted face, disfigured, extra limbs, extra fingers, mutated hands, bad anatomy, blurry, low quality, low resolution, watermark, text, logo, ugly, creepy, duplicate, cropped face, changed identity, extra people, missing people, face mask covering face, club crest, team logo, emblem";
@@ -742,20 +742,23 @@ async function geminiConImagenes(pedido, imagenes, temp) {
   if (!GEM_KEY) return null;
   const H = { "content-type": "application/json", "x-goog-api-key": GEM_KEY };
   const parts = [{ text: pedido }].concat(imagenes.map(im => ({ inline_data: { mime_type: im.mime, data: im.data } })));
-  const modelos = [GEM_ACTUAL, ...((GEM_LISTA || []).filter(n => n !== GEM_ACTUAL))].slice(0, 6);
+  try { await cargarListaGemini(); } catch (e) {}
+  const modelos = [GEM_ACTUAL, ...((GEM_LISTA || []).filter(n => n !== GEM_ACTUAL))].slice(0, 12);
+  const llamar = m => fetch("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", { method: "POST", headers: H,
+    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: (typeof temp === "number" ? temp : 0.5) } }) });
   let ultimo = "";
-  for (const m of modelos) {
-    let r;
-    for (let k = 0; k < 3; k++) {
-      r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", { method: "POST", headers: H,
-        body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: (typeof temp === "number" ? temp : 0.5) } }) });
-      if (r.status !== 503 && r.status !== 500) break;
-      await new Promise(ok => setTimeout(ok, 5000 * (k + 1)));
+  // Si Google está saturado (503/500) salta enseguida al próximo modelo; al final da otra vuelta más lenta
+  for (let vuelta = 0; vuelta < 2; vuelta++) {
+    for (const m of modelos) {
+      let r; try { r = await llamar(m); } catch (e) { ultimo = e.message; continue; }
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { GEM_ACTUAL = m; return ((((d.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.text || "").join(""); }
+      ultimo = "Gemini " + r.status + " " + ((d.error && d.error.message) || "").slice(0, 140);
+      if (![400, 403, 404, 429, 500, 503].includes(r.status)) throw new Error(ultimo);
+      if (vuelta === 1) await new Promise(ok => setTimeout(ok, 3000));
     }
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) { GEM_ACTUAL = m; return ((((d.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.text || "").join(""); }
-    ultimo = "Gemini " + r.status + " " + ((d.error && d.error.message) || "").slice(0, 140);
-    if (![400, 403, 404, 429, 500, 503].includes(r.status)) break;
+    if (!/50[03]/.test(ultimo)) break;
+    await new Promise(ok => setTimeout(ok, 8000));
   }
   throw new Error(ultimo || "Gemini no respondió");
 }
@@ -798,7 +801,7 @@ app.post("/contenido/puntajes", limitarIP, chequearToken, async (req, res) => {
       "Respondé SOLO JSON: {\"etapa\":\"\",\"jurados\":[\"...\"],\"categorias\":[{\"nombre\":\"Humoristas\",\"conjuntos\":[{\"nombre\":\"...\",\"puntos\":[10,8,11]}]}]}";
     let salida;
     try { salida = await geminiConImagenes(pedido, [{ mime: String(b.mime || "image/jpeg"), data }], 0); }
-    catch (e) { return res.status(500).json({ error: /429|quota/i.test(e.message) ? "Se terminó el cupo gratis de hoy de la IA (Gemini). Escribí los puntajes a mano o probá mañana" : e.message }); }
+    catch (e) { return res.status(/50[03]/.test(e.message) ? 503 : 500).json({ error: /429|quota/i.test(e.message) ? "Se terminó el cupo gratis de hoy de la IA (Gemini). Escribí los puntajes a mano o probá mañana" : /50[03]/.test(e.message) ? "La IA de Google está saturada ahora" : e.message }); }
     const m = (salida || "").match(/\{[\s\S]*\}/);
     let r; try { r = JSON.parse(m ? m[0] : salida); } catch (e) { return res.status(500).json({ error: "La IA no pudo leer la tabla" }); }
     const cats = (Array.isArray(r.categorias) ? r.categorias : []).map(c => ({
